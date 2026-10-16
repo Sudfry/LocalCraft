@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LocalCraft · 本地文件处理</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <!--
+      自检兜底：如果界面脚本起不来（代理拦了回环请求、服务已经退出、
+      或者浏览器把页面当文件下载了），这里会显示一段看得懂的说明，
+      而不是留一个纯白页面让人无从下手。
+    -->
+    <noscript>
+      <div style="padding:2em;font:16px/1.8 sans-serif;color:#b42318">
+        这个界面需要 JavaScript 才能运行。如果你的浏览器是 IE 兼容模式，
+        请改用 Edge 或 Chrome 打开。
+      </div>
+    </noscript>
+    <div id="boot-error" style="display:none;position:fixed;inset:0;z-index:99999;
+         background:#14161a;color:#e6e8eb;font:15px/1.9 system-ui,sans-serif;
+         padding:6vh 8vw;overflow:auto">
+      <h1 style="font-size:22px;margin:0 0 .4em">界面没能启动</h1>
+      <p style="color:#9aa4b2;margin:0 0 1.6em">
+        本地服务的地址能打开，但页面脚本没有跑起来。常见原因和解决办法：
+      </p>
+      <ol style="margin:0 0 1.6em;padding-left:1.4em">
+        <li style="margin-bottom:.9em">
+          <b>系统代理拦住了 127.0.0.1</b>（装了 Clash / v2ray / 各类加速器时最常见）。<br>
+          请在代理软件里把 127.0.0.1 和 localhost 加入直连（绕过）列表，
+          或临时关掉系统代理后点下面的按钮重新加载。
+        </li>
+        <li style="margin-bottom:.9em">
+          <b>主程序已经退出</b>。重新双击 LocalCraft.exe，再刷新本页。
+        </li>
+        <li style="margin-bottom:.9em">
+          <b>浏览器内核太旧</b>。本界面需要 Chromium 内核（Edge / Chrome），
+          不支持 IE 模式和部分国产浏览器的兼容模式。
+        </li>
+      </ol>
+      <p style="color:#9aa4b2;margin:0 0 .6em">当前地址（请连 token 一起复制）：</p>
+      <p id="boot-url" style="word-break:break-all;background:#1c1f24;border:1px solid #2a2e36;
+         border-radius:8px;padding:12px 14px;font-family:ui-monospace,Consolas,monospace;
+         font-size:13px;color:#8ab4f8"></p>
+      <p style="margin-top:1.6em">
+        <button onclick="location.reload()"
+          style="background:#3b6ef5;color:#fff;border:0;border-radius:8px;
+                 padding:10px 20px;font-size:14px;cursor:pointer">重新加载</button>
+      </p>
+    </div>
+    <script>
+      /* 界面脚本跑起来后会把这个标志置为 true；到点还没置位就说明没启动 */
+      window.__lcBooted = false;
+      setTimeout(function () {
+        if (window.__lcBooted) return;
+        var el = document.getElementById('boot-error');
+        if (!el) return;
+        var u = document.getElementById('boot-url');
+        if (u) u.textContent = location.href;
+        el.style.display = 'block';
+      }, 8000);
+    </script>
+
+<div class="app">
+  <!-- ═══════════════ 侧边栏 ═══════════════ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg viewBox="0 0 24 24"><path d="M4 7.2A2.2 2.2 0 0 1 6.2 5h3.1a2 2 0 0 1 1.5.7l.9 1.1a2 2 0 0 0 1.5.7h4.6A2.2 2.2 0 0 1 20 9.7"/>
+        <path d="M4 7.2v9.6A2.2 2.2 0 0 0 6.2 19h11.6a2.2 2.2 0 0 0 2.2-2.2v-4.6a2.2 2.2 0 0 0-2.2-2.2H6.6"/>
+        <path d="M9.4 13.2l1.9 1.9 3.5-3.5"/></svg>
+      </div>
+      <div class="brand-text">
+        <strong>LocalCraft</strong>
+        <span>本地文件处理工具</span>
+      </div>
+    </div>
+
+    <div class="nav-group-label">处理工具</div>
+    <nav class="nav" id="nav">
+      <button class="nav-item is-active" data-view="rename">
+        <svg viewBox="0 0 24 24"><path d="M4.5 7.5h10M4.5 7.5l2.6-2.6M4.5 7.5l2.6 2.6M19.5 16.5h-10M19.5 16.5l-2.6-2.6M19.5 16.5l-2.6 2.6"/></svg>
+        <span>批量重命名</span>
+      </button>
+      <button class="nav-item" data-view="organize">
+        <svg viewBox="0 0 24 24"><path d="M3.5 6.8A1.8 1.8 0 0 1 5.3 5h3.6l1.5 1.9h7.3a1.8 1.8 0 0 1 1.8 1.8v7.5a1.8 1.8 0 0 1-1.8 1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z"/><path d="M8.6 13h6.8M8.6 13l1.9-1.9M8.6 13l1.9 1.9"/></svg>
+        <span>整理分类</span>
+      </button>
+      <button class="nav-item" data-view="convert">
+        <svg viewBox="0 0 24 24"><path d="M4 8.5h13M4 8.5l3-3M4 8.5l3 3"/><path d="M20 15.5H7M20 15.5l-3-3M20 15.5l-3 3"/></svg>
+        <span>格式转换</span>
+      </button>
+      <button class="nav-item" data-view="dedup">
+        <svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="11" height="11" rx="1.6"/><rect x="9.5" y="9.5" width="11" height="11" rx="1.6"/></svg>
+        <span>内容去重</span>
+      </button>
+      <button class="nav-item" data-view="summary">
+        <svg viewBox="0 0 24 24"><path d="M5 4.5h11l3.5 3.5v11.5H5z"/><path d="M8 9.5h8M8 12.5h8M8 15.5h5"/></svg>
+        <span>文档摘要</span>
+      </button>
+    </nav>
+
+    <div class="nav-group-label">安全</div>
+    <nav class="nav">
+      <button class="nav-item" data-view="history">
+        <svg viewBox="0 0 24 24"><path d="M3.8 12a8.2 8.2 0 1 0 2.5-5.9M3.8 4.4v4.4h4.4"/><path d="M12 7.6V12l2.9 1.7"/></svg>
+        <span>回退历史</span>
+        <em class="nav-badge" id="badge-journals" hidden></em>
+      </button>
+      <button class="nav-item" data-view="env">
+        <svg viewBox="0 0 24 24"><path d="M12 2.6l7.4 3.2v5.1c0 4.9-3.1 9.2-7.4 10.5C7.7 20.1 4.6 15.8 4.6 10.9V5.8z"/><path d="M9.2 11.8l2 2 3.6-3.6"/></svg>
+        <span>离线自检</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="offline-chip">
+        <span class="pulse"></span>
+        <div>
+          <strong>完全离线</strong>
+          <span>不联网 · 不上传</span>
+        </div>
+      </div>
+      <div class="foot-stat" id="foot-storage">正在读取…</div>
+      <button class="btn btn-quiet btn-block" id="btn-quit">退出程序</button>
+    </div>
+  </aside>
+
+  <!-- ═══════════════ 主区域 ═══════════════ -->
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-text">
+        <h1 id="page-title">批量重命名</h1>
+        <p id="page-sub">按规则批量改名；执行前先看对照表，随时可回退。</p>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-btn" id="btn-theme" title="切换明暗主题">
+          <svg viewBox="0 0 24 24"><path d="M20.5 13.2A8.6 8.6 0 1 1 10.8 3.5a6.7 6.7 0 0 0 9.7 9.7z"/></svg>
+        </button>
+        <button class="btn btn-soft" id="btn-rollback-shortcut">
+          <svg viewBox="0 0 24 24"><path d="M3.8 12a8.2 8.2 0 1 0 2.5-5.9M3.8 4.4v4.4h4.4"/></svg>
+          一键回退
+        </button>
+      </div>
+    </header>
+
+    <div class="content" id="content">
+
+      <!-- ─────────── 批量重命名 ─────────── -->
+      <section class="view is-active" id="view-rename">
+        <ol class="stepper" data-stepper="rename">
+          <li class="is-done"><b>1</b><span>选择文件夹</span></li>
+          <li><b>2</b><span>设置规则</span></li>
+          <li><b>3</b><span>预览确认</span></li>
+          <li><b>4</b><span>执行 / 回退</span></li>
+        </ol>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>文件夹</h2>
+            <p>扫描阶段完全是只读的，不会改动任何文件。</p>
+          </div>
+          <div class="picker-row">
+            <span class="picker-icon">
+              <svg viewBox="0 0 24 24"><path d="M3.5 6.8A1.8 1.8 0 0 1 5.3 5h3.6l1.5 1.9h7.3a1.8 1.8 0 0 1 1.8 1.8v7.5a1.8 1.8 0 0 1-1.8 1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z"/></svg>
+            </span>
+            <input type="text" id="rename-dir" class="input input-lg" placeholder="点击右侧按钮选择，或直接粘贴完整路径…">
+            <button class="btn btn-primary" data-pick="rename-dir">选择文件夹</button>
+          </div>
+          <div class="scanbar" id="rename-scan" hidden>
+            <span class="scanbar-dot"></span><span id="rename-scan-text"></span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>命名模板</h2>
+            <p>填了模板就按模板来；留空则使用下方的查找替换与前后缀。</p>
+          </div>
+          <input type="text" id="rename-template" class="input mono input-lg"
+                 placeholder="例如：{date}_{n:03d}{ext}">
+          <div class="chips">
+            <span class="chip-label">插入变量</span>
+            <button class="chip" data-insert="rename-template" data-token="{name}">原名</button>
+            <button class="chip" data-insert="rename-template" data-token="{ext}">扩展名</button>
+            <button class="chip" data-insert="rename-template" data-token="{n:03d}">序号</button>
+            <button class="chip" data-insert="rename-template" data-token="{date}">日期</button>
+            <button class="chip" data-insert="rename-template" data-token="{year}">年</button>
+            <button class="chip" data-insert="rename-template" data-token="{month}">月</button>
+            <button class="chip" data-insert="rename-template" data-token="{parent}">上级目录</button>
+            <button class="chip" data-insert="rename-template" data-token="{size}">字节数</button>
+          </div>
+          <p class="hint">模板里写了 <code>{ext}</code> 就是完整文件名；没写则自动保留原扩展名。</p>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>查找替换</h2></div>
+            <div class="field"><label>查找</label><input type="text" id="rename-find" class="input"></div>
+            <div class="field"><label>替换为</label><input type="text" id="rename-replace" class="input"></div>
+            <div class="field-row">
+              <label class="switch"><input type="checkbox" id="rename-regex"><span></span><em>正则表达式</em></label>
+              <label class="switch"><input type="checkbox" id="rename-icase"><span></span><em>忽略大小写</em></label>
+            </div>
+            <div class="field"><label>作用对象</label>
+              <select id="rename-target" class="input">
+                <option value="stem">主名（不含扩展名）</option>
+                <option value="name">完整文件名（含扩展名）</option>
+                <option value="ext">仅扩展名</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>前后缀与序号</h2></div>
+            <div class="field-row">
+              <div class="field"><label>前缀</label><input type="text" id="rename-prefix" class="input"></div>
+              <div class="field"><label>后缀</label><input type="text" id="rename-suffix" class="input"></div>
+            </div>
+            <label class="switch mb"><input type="checkbox" id="rename-number"><span></span><em>追加序号</em></label>
+            <div class="field-row three">
+              <div class="field"><label>位置</label>
+                <select id="rename-number-pos" class="input">
+                  <option value="suffix">后缀</option><option value="prefix">前缀</option>
+                  <option value="only">仅序号</option>
+                </select></div>
+              <div class="field"><label>起始</label><input type="number" id="rename-number-start" class="input" value="1"></div>
+              <div class="field"><label>位数</label><input type="number" id="rename-number-width" class="input" value="3"></div>
+              <div class="field"><label>步长</label><input type="number" id="rename-number-step" class="input" value="1"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>大小写</h2></div>
+            <div class="field-row">
+              <div class="field"><label>主名</label>
+                <select id="rename-case" class="input">
+                  <option value="keep">保持不变</option><option value="lower">全部小写</option>
+                  <option value="upper">全部大写</option><option value="title">首字母大写</option>
+                </select></div>
+              <div class="field"><label>扩展名</label>
+                <select id="rename-ext-case" class="input">
+                  <option value="keep">保持不变</option><option value="lower">小写</option>
+                  <option value="upper">大写</option>
+                </select></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>处理范围</h2></div>
+            <div class="field-row">
+              <div class="field"><label>只处理这些扩展名</label><input type="text" id="rename-include" class="input" placeholder=".jpg .png（留空=全部）"></div>
+              <div class="field"><label>排除</label><input type="text" id="rename-exclude" class="input" value=".tmp .lnk .ini"></div>
+            </div>
+            <div class="field-row">
+              <label class="switch"><input type="checkbox" id="rename-recursive"><span></span><em>包含子文件夹</em></label>
+              <label class="switch"><input type="checkbox" id="rename-reverse"><span></span><em>倒序</em></label>
+            </div>
+            <div class="field"><label>排序依据（决定序号顺序）</label>
+              <select id="rename-sort" class="input">
+                <option value="name">文件名</option><option value="mtime">修改时间</option>
+                <option value="size">文件大小</option><option value="path">完整路径</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary btn-lg" id="btn-rename-preview">
+            <svg viewBox="0 0 24 24"><path d="M2.6 12S6 5.6 12 5.6 21.4 12 21.4 12 18 18.4 12 18.4 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.7"/></svg>
+            生成预览
+          </button>
+          <span class="actions-hint">下一步会列出「旧状态 → 新状态」对照表，确认后才会真正执行。</span>
+        </div>
+      </section>
+
+      <!-- ─────────── 整理分类 ─────────── -->
+      <section class="view" id="view-organize">
+        <ol class="stepper" data-stepper="organize">
+          <li class="is-done"><b>1</b><span>选择文件夹</span></li>
+          <li><b>2</b><span>设定分类</span></li>
+          <li><b>3</b><span>预览确认</span></li>
+          <li><b>4</b><span>执行 / 回退</span></li>
+        </ol>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>文件夹</h2>
+            <p>先扫描看看家底 —— 扫描只读，不修改任何文件。</p>
+          </div>
+          <div class="picker-row">
+            <span class="picker-icon">
+              <svg viewBox="0 0 24 24"><path d="M3.5 6.8A1.8 1.8 0 0 1 5.3 5h3.6l1.5 1.9h7.3a1.8 1.8 0 0 1 1.8 1.8v7.5a1.8 1.8 0 0 1-1.8 1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z"/></svg>
+            </span>
+            <input type="text" id="organize-dir" class="input input-lg" placeholder="点击右侧按钮选择…">
+            <button class="btn btn-soft" id="btn-organize-scan">扫描统计</button>
+            <button class="btn btn-primary" data-pick="organize-dir">选择文件夹</button>
+          </div>
+          <div id="organize-stats" class="stats-wrap" hidden></div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>分类结构</h2><p>用变量拼出目标文件夹层级。</p></div>
+            <div class="field"><label>目标结构</label>
+              <input type="text" id="organize-template" class="input mono" value="{category}"></div>
+            <div class="chips">
+              <span class="chip-label">常用</span>
+              <button class="chip" data-set="organize-template" data-token="{category}">按类型</button>
+              <button class="chip" data-set="organize-template" data-token="{category}/{year}">类型+年</button>
+              <button class="chip" data-set="organize-template" data-token="{category}/{year}-{month}">类型+年月</button>
+              <button class="chip" data-set="organize-template" data-token="{year}/{month}">按年月</button>
+              <button class="chip" data-set="organize-template" data-token="{ext}">按扩展名</button>
+              <button class="chip" data-set="organize-template" data-token="{letter}">按首字母</button>
+              <button class="chip" data-set="organize-template" data-token="{size}">按体积</button>
+            </div>
+            <p class="hint">可用变量：<code>{category}</code> <code>{year}</code> <code>{month}</code>
+              <code>{day}</code> <code>{ext}</code> <code>{letter}</code> <code>{size}</code></p>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>处理方式与筛选</h2></div>
+            <div class="segment" id="organize-mode">
+              <button class="seg is-active" data-value="move">移动（不留原件）</button>
+              <button class="seg" data-value="copy">复制（保留原件）</button>
+            </div>
+            <label class="switch mb"><input type="checkbox" id="organize-recursive" checked><span></span><em>包含子文件夹</em></label>
+            <div class="field-row three">
+              <div class="field"><label>最小体积</label><input type="text" id="organize-min" class="input" placeholder="1MB"></div>
+              <div class="field"><label>最大体积</label><input type="text" id="organize-max" class="input" placeholder="500MB"></div>
+              <div class="field"><label>只处理 N 天前</label><input type="number" id="organize-older" class="input" placeholder="7"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary btn-lg" id="btn-organize-preview">
+            <svg viewBox="0 0 24 24"><path d="M2.6 12S6 5.6 12 5.6 21.4 12 21.4 12 18 18.4 12 18.4 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.7"/></svg>
+            生成预览
+          </button>
+          <span class="actions-hint">会先把每个文件的目标位置列出来，确认后才会搬运。</span>
+        </div>
+      </section>
+
+      <!-- ─────────── 格式转换 ─────────── -->
+      <section class="view" id="view-convert">
+        <ol class="stepper" data-stepper="convert">
+          <li class="is-done"><b>1</b><span>选择文件夹</span></li>
+          <li><b>2</b><span>选择目标格式</span></li>
+          <li><b>3</b><span>预览确认</span></li>
+          <li><b>4</b><span>执行 / 回退</span></li>
+        </ol>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>文件夹</h2>
+            <p>扫描是只读的；真正转换发生在你确认之后，产物会写进回退日志。</p>
+          </div>
+          <div class="picker-row">
+            <span class="picker-icon">
+              <svg viewBox="0 0 24 24"><path d="M3.5 6.8A1.8 1.8 0 0 1 5.3 5h3.6l1.5 1.9h7.3a1.8 1.8 0 0 1 1.8 1.8v7.5a1.8 1.8 0 0 1-1.8 1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z"/></svg>
+            </span>
+            <input type="text" id="convert-dir" class="input input-lg" placeholder="点击右侧按钮选择…">
+            <button class="btn btn-primary" data-pick="convert-dir">选择文件夹</button>
+          </div>
+          <div class="scanbar" id="convert-scan" hidden>
+            <span class="scanbar-dot"></span><span id="convert-scan-text"></span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>目标格式</h2>
+            <p>带「内置」标记的不需要任何外部程序，断网可用。</p></div>
+          <div class="fmt-grid" id="convert-formats"></div>
+          <label class="switch" style="margin-top:14px">
+            <input type="checkbox" id="convert-recursive"><span></span><em>包含子文件夹</em>
+          </label>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>外部引擎</h2>
+            <p>把可执行文件放进程序目录的 <code>tools\</code> 后重启即可启用。</p></div>
+          <div class="engine-list" id="convert-engines"></div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary btn-lg" id="btn-convert-preview">
+            <svg viewBox="0 0 24 24"><path d="M2.6 12S6 5.6 12 5.6 21.4 12 21.4 12 18 18.4 12 18.4 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.7"/></svg>
+            生成预览
+          </button>
+          <span class="actions-hint">会列出每个源文件将生成哪个新文件，确认后才会转换。</span>
+        </div>
+      </section>
+
+      <!-- ─────────── 内容去重 ─────────── -->
+      <section class="view" id="view-dedup">
+        <div class="card">
+          <div class="card-head"><h2>文件夹</h2>
+            <p>按<strong>内容</strong>比对，不看文件名 —— 文件名完全不同但内容雷同的文档也能找出来。</p></div>
+          <div class="picker-row">
+            <span class="picker-icon">
+              <svg viewBox="0 0 24 24"><path d="M3.5 6.8A1.8 1.8 0 0 1 5.3 5h3.6l1.5 1.9h7.3a1.8 1.8 0 0 1 1.8 1.8v7.5a1.8 1.8 0 0 1-1.8 1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z"/></svg>
+            </span>
+            <input type="text" id="dedup-dir" class="input input-lg" placeholder="点击右侧按钮选择…">
+            <button class="btn btn-primary" data-pick="dedup-dir">选择文件夹</button>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>相似度阈值</h2>
+              <p>越高越严格。90%~95% 适合找"同一份文档的不同版本"。</p></div>
+            <div class="slider-row">
+              <input type="range" id="dedup-threshold" min="60" max="99" value="92" step="1">
+              <span class="slider-value" id="dedup-threshold-val">92%</span>
+            </div>
+            <div class="field"><label>相似文档怎么处理</label>
+              <select id="dedup-action" class="input">
+                <option value="0">移到同目录下的 _重复文件 文件夹（可回退）</option>
+                <option value="1">移到回收站（可回退）</option>
+              </select>
+            </div>
+            <label class="switch"><input type="checkbox" id="dedup-recursive" checked><span></span><em>包含子文件夹</em></label>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>扫描范围</h2><p>支持 docx / xlsx / pptx / pdf / txt / md / html 等。</p></div>
+            <div class="field"><label>忽略正文少于 N 字的文件</label>
+              <input type="number" id="dedup-minchars" class="input" value="40"></div>
+            <button class="btn btn-soft btn-block" id="btn-dedup-scan" style="margin-top:6px">只读扫描（不修改任何文件）</button>
+          </div>
+        </div>
+
+        <div class="card card-flush" id="dedup-result-card" hidden>
+          <div class="preview-head">
+            <div><h2 id="dedup-result-title">扫描结果</h2><p id="dedup-result-sub"></p></div>
+            <div class="stat-row" id="dedup-stats"></div>
+          </div>
+          <div class="dedup-groups" id="dedup-groups"></div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary btn-lg" id="btn-dedup-preview">
+            <svg viewBox="0 0 24 24"><path d="M2.6 12S6 5.6 12 5.6 21.4 12 21.4 12 18 18.4 12 18.4 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.7"/></svg>
+            生成预览
+          </button>
+          <span class="actions-hint">每组保留第一份，其余移走；具体动作可以逐行勾选。</span>
+        </div>
+      </section>
+
+      <!-- ─────────── 文档摘要 ─────────── -->
+      <section class="view" id="view-summary">
+        <div class="card">
+          <div class="card-head"><h2>选择文档</h2>
+            <p>纯本地算法（TextRank / TF-IDF），不依赖任何 AI 模型，秒出结果。</p></div>
+          <div class="picker-row">
+            <span class="picker-icon">
+              <svg viewBox="0 0 24 24"><path d="M5 4.5h11l3.5 3.5v11.5H5z"/><path d="M8 9.5h8M8 12.5h8"/></svg>
+            </span>
+            <input type="text" id="summary-path" class="input input-lg" placeholder="选择一个文档，或直接粘贴路径…">
+            <button class="btn btn-soft" id="btn-summary-file">选择文件</button>
+          </div>
+          <div class="picker-row" style="margin-top:10px">
+            <input type="text" id="summary-dir" class="input" placeholder="也可以选一个文件夹，批量摘要">
+            <button class="btn btn-soft" data-pick="summary-dir">选择文件夹</button>
+            <button class="btn btn-quiet" id="btn-summary-batch">批量摘要</button>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>算法</h2></div>
+            <div class="segment" id="summary-algo">
+              <button class="seg is-active" data-value="1">TextRank（推荐）</button>
+              <button class="seg" data-value="0">TF-IDF</button>
+            </div>
+            <div class="field"><label>摘要句数（0 = 自动 3~8 句）</label>
+              <input type="number" id="summary-sentences" class="input" value="5" min="0" max="30"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>导出</h2><p>摘要与原文都能导出，产物同样可回退。</p></div>
+            <div class="btn-row">
+              <button class="btn btn-soft" data-export="md">
+                <svg viewBox="0 0 24 24"><path d="M5 12.5h9M5 12.5l3-3M5 12.5l3 3"/><path d="M14 12.5h5"/></svg>Markdown</button>
+              <button class="btn btn-soft" data-export="docx">
+                <svg viewBox="0 0 24 24"><path d="M5 12.5h9M5 12.5l3-3M5 12.5l3 3"/><path d="M14 12.5h5"/></svg>Word</button>
+              <button class="btn btn-soft" data-export="pdf">
+                <svg viewBox="0 0 24 24"><path d="M5 12.5h9M5 12.5l3-3M5 12.5l3 3"/><path d="M14 12.5h5"/></svg>PDF</button>
+            </div>
+            <p class="hint">导出会先把「原文 + 摘要」合成一份 Markdown，再转成目标格式。
+              中文标题层级用 Heading 1–6，上下标用 vertAlign，Word 导航窗格可直接用。</p>
+          </div>
+        </div>
+
+        <div class="card" id="summary-result-card" hidden>
+          <div class="card-head"><h2 id="summary-title">摘要结果</h2><p id="summary-sub"></p></div>
+          <div class="stat-row" id="summary-stats" style="margin-bottom:14px"></div>
+          <h3 class="sub-h">关键句（按原文顺序，点一下可定位）</h3>
+          <ol class="sentence-list" id="summary-sentences"></ol>
+          <h3 class="sub-h">关键词</h3>
+          <div class="chips" id="summary-keywords"></div>
+        </div>
+
+        <div class="card card-flush" id="summary-batch-card" hidden>
+          <div class="preview-head">
+            <div><h2>批量摘要</h2><p id="batch-sub"></p></div>
+          </div>
+          <div class="batch-list" id="batch-list"></div>
+        </div>
+      </section>
+
+      <!-- ─────────── 预览 ─────────── -->
+      <section class="view" id="view-preview">
+        <div class="preview-summary">
+          <div class="preview-summary-text">
+            <h2 id="preview-title">预览对照表</h2>
+            <p id="preview-note"></p>
+          </div>
+          <div class="stat-row" id="preview-stats"></div>
+        </div>
+
+        <div class="toolbar">
+          <div class="segment" id="preview-policy">
+            <button class="seg" data-value="rename">同名自动改名</button>
+            <button class="seg" data-value="overwrite">覆盖（可回退）</button>
+            <button class="seg" data-value="skip">跳过</button>
+            <button class="seg" data-value="ask">标红待定</button>
+          </div>
+          <div class="spacer"></div>
+          <label class="switch"><input type="checkbox" id="preview-only-conflicts"><span></span><em>只看冲突</em></label>
+          <button class="btn btn-quiet btn-sm" id="btn-preview-all">全选</button>
+          <button class="btn btn-quiet btn-sm" id="btn-preview-none">全不选</button>
+          <button class="btn btn-quiet btn-sm" id="btn-preview-invert">反选</button>
+          <button class="btn btn-quiet btn-sm" id="btn-preview-csv">导出 CSV</button>
+        </div>
+
+        <div class="table-card">
+          <div class="table-scroll">
+            <table class="table" id="preview-table">
+              <thead><tr>
+                <th class="c-sel"></th><th class="c-no">#</th><th class="c-lv">状态</th>
+                <th class="c-a">旧状态</th><th class="c-arrow"></th><th class="c-b">新状态</th>
+                <th class="c-note">冲突 / 备注</th>
+              </tr></thead>
+              <tbody id="preview-body"></tbody>
+            </table>
+          </div>
+          <div class="table-foot" id="preview-foot"></div>
+        </div>
+
+        <div class="confirmbar">
+          <div class="confirmbar-info" id="confirm-info"></div>
+          <div class="spacer"></div>
+          <button class="btn btn-quiet" id="btn-back-edit">← 返回修改</button>
+          <button class="btn btn-soft" id="btn-preview-dry">只读预演</button>
+          <button class="btn btn-primary btn-lg" id="btn-execute">
+            <svg viewBox="0 0 24 24"><path d="M5 12.6l4.4 4.4L19 7.4"/></svg>
+            执行
+          </button>
+        </div>
+      </section>
+
+      <!-- ─────────── 回退历史 ─────────── -->
+      <section class="view" id="view-history">
+        <div class="card card-tight">
+          <div class="card-head">
+            <h2>操作历史</h2>
+            <p>回退靠日志逆序重放，与系统撤销无关 —— 几个月前的操作也能回退。</p>
+          </div>
+          <div class="toolbar toolbar-flat">
+            <button class="btn btn-quiet btn-sm" id="btn-history-refresh">刷新列表</button>
+            <button class="btn btn-quiet btn-sm" id="btn-history-dir">打开日志目录</button>
+            <div class="spacer"></div>
+            <button class="btn btn-quiet btn-sm" id="btn-purge-journals">清理 90 天前日志</button>
+            <button class="btn btn-danger-quiet btn-sm" id="btn-purge-trash">清空回收站</button>
+          </div>
+        </div>
+
+        <div class="card card-flush" id="history-card">
+          <div class="table-scroll table-scroll-mid">
+            <table class="table">
+              <thead><tr>
+                <th class="c-when">时间</th><th class="c-kind">类型</th>
+                <th class="c-steps">可回退</th><th class="c-status">状态</th>
+                <th class="c-root">操作目录</th><th class="c-act"></th>
+              </tr></thead>
+              <tbody id="history-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card" id="history-detail-card" hidden>
+          <div class="card-head"><h2 id="history-detail-title">记录详情</h2>
+            <p>这里是日志里记录的实际步骤。</p></div>
+          <div class="step-list" id="history-detail"></div>
+        </div>
+      </section>
+
+      <!-- ─────────── 离线自检 ─────────── -->
+      <section class="view" id="view-env">
+        <div class="banner">
+          <svg viewBox="0 0 24 24"><path d="M12 2.6l7.4 3.2v5.1c0 4.9-3.1 9.2-7.4 10.5C7.7 20.1 4.6 15.8 4.6 10.9V5.8z"/><path d="M9.2 11.8l2 2 3.6-3.6"/></svg>
+          <div>
+            <strong>这个程序不会发起任何网络请求</strong>
+            <span>核心功能全部由 Win32 API 与标准库实现，断网可用。界面通过本机回环地址（127.0.0.1）与后端通信，数据不出本机。</span>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>运行环境</h2></div>
+            <dl class="kv" id="env-info"></dl>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>已实现能力</h2><p>全部离线可用，无需安装任何运行库。</p></div>
+            <ul class="cap-list" id="env-caps"></ul>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>外部引擎</h2>
+            <p>把引擎可执行文件放进程序目录的 <code>tools\</code> 文件夹，重启后自动识别。</p></div>
+          <div class="engine-list" id="env-engines"></div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<!-- ═══════════════ 任务进度 ═══════════════ -->
+<div class="taskbar" id="taskbar" hidden>
+  <div class="taskbar-inner">
+    <div class="taskbar-icon"><span class="spinner"></span></div>
+    <div class="taskbar-body">
+      <div class="taskbar-head">
+        <span id="task-label">正在执行…</span>
+        <span id="task-count" class="taskbar-count">0 / 0</span>
+      </div>
+      <div class="progress"><div class="progress-fill" id="task-bar"></div></div>
+    </div>
+    <button class="btn btn-quiet btn-sm" id="btn-cancel-task">取消</button>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div class="modal-root" id="modal-root"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

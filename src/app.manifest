@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!--
+    没有这份清单的话，全部控件都会按 Windows 95 的老样式绘制 ——
+    复选框会变成凹进去的小方块，按钮是灰扑扑的立体边，整个界面看着像二十年前的软件。
+    引用了 Common-Controls 6.0 之后，控件才会用系统主题（浅色/深色、圆角、平滑字体）。
+
+    同时在这里声明 DPI 感知（比代码里调 SetProcessDPIAware 更早生效），
+    否则在 200% 缩放的屏幕上窗口会被系统按缩放倍数再放一次，跑到屏幕外面去。
+  -->
+  <assemblyIdentity type="win32" name="LocalCraft" version="1.0.0.0"
+                    processorArchitecture="amd64"/>
+
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32"
+                        name="Microsoft.Windows.Common-Controls"
+                        version="6.0.0.0"
+                        processorArchitecture="*"
+                        publicKeyToken="6595b64144ccf1df"
+                        language="*"/>
+    </dependentAssembly>
+  </dependency>
+
+  <!--
+    明确声明"以当前用户权限运行，永不请求提权"。
+    不写这一段时系统按默认（asInvoker）处理，行为一样；
+    但写清楚了才能保证任何情况下都不会弹出 UAC
+    那个"你要允许此应用对你的设备进行更改吗？"。
+
+    LocalCraft 也确实不需要管理员权限：数据目录在用户自己的 AppData 下，
+    操作的文件也都是用户自己能访问的。
+  -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">permonitorv2,permonitor</dpiAwareness>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 7 / 8 / 8.1 / 10 -->
+      <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/>
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+</assembly>

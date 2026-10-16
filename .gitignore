@@ -1,0 +1,33 @@
+# ---- 构建产物（都能从源码重新生成）----
+build/obj/
+build/*.exe
+build/*.dll
+build/*.res
+build/zipwork/
+build/testtmp/
+build/bout.txt
+build/*.log
+build/发布包/
+
+# 界面资源由 build.ps1 调 tools/embed.c 生成，不入库
+src/webui_assets.c
+
+# ---- 运行时数据 ----
+.localcraft/
+portable.marker
+
+# 注意：src/app.ico **要入库**。
+# 它是 tools/make_icon.py 生成的，但那个脚本依赖 Python + Pillow；
+# 把 .ico 提交进去，别人只要有 MinGW 就能直接编译，不必先装 Python。
+
+# ---- 测试数据（体积不小，且可重新生成）----
+测试数据/
+dist/测试数据/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+desktop.ini

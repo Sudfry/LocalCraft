@@ -1,0 +1,43 @@
+#pragma code_page(65001)
+#include <windows.h>
+
+/* 应用图标。
+   窗口标题栏、任务栏、Alt+Tab、资源管理器里显示的都是它。
+   ID 用 101 而不是 1 —— 1 已经被下面的 RT_MANIFEST 占用了，
+   虽然两者类型不同、并不真的冲突，但分开更不容易让人看错。 */
+101 ICON "app.ico"
+
+/* 把 app.manifest 作为 RT_MANIFEST(24) 资源嵌进 exe。
+   没有它，所有控件都会按 Windows 95 的老样式绘制；
+   有了它才会用系统主题，同时声明 DPI 感知。 */
+1 24 "app.manifest"
+
+/* 版本信息：右键属性里能看到 */
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404B0"
+        BEGIN
+            VALUE "CompanyName",      "Sudfry"
+            VALUE "LegalCopyright",   "© Sudfry. 保留所有权利。"
+            VALUE "FileDescription",  "LocalCraft 本地文件处理工具（完全离线）"
+            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "InternalName",     "LocalCraft"
+            VALUE "OriginalFilename", "LocalCraft.exe"
+            VALUE "ProductName",      "LocalCraft"
+            VALUE "ProductVersion",   "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END
