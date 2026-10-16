@@ -32,7 +32,15 @@ rem   - 关掉这个窗口就没了
 rem ---------------------------------------------------------------
 
 set PSARGS=%*
-if "%PSARGS%"=="" set PSARGS=-DryRun
+if "%PSARGS%"=="" (
+  set PSARGS=-DryRun
+  echo   [提示] 没给参数，这次只做预演，不会真的提交和推送。
+  echo.
+  echo          要真的推，就带参数运行本文件，例如：
+  echo             上传到GitHub.bat -Tag v2.1.0
+  echo          （双击时 Windows 不方便带参数，可以在这个窗口里直接敲。）
+  echo.
+)
 
 echo   参数: %PSARGS%
 echo.
