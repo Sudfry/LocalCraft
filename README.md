@@ -496,11 +496,25 @@ EXIF / ID3 / xlsx 解析全部自己实现，所以 exe 里塞得下一整套中
 # 归档一个版本：源码包 + 程序包 + 文档快照 + SHA256 清单 → 发布\vX.Y.Z\
 .\打包版本.ps1
 
-# 推送到 GitHub
-.\上传到GitHub.ps1 -DryRun              # 先看会做什么
-.\上传到GitHub.ps1                      # 推代码
-.\上传到GitHub.ps1 -Tag v2.1.0          # 推代码 + 打版本 tag
+# 推送到 GitHub —— 双击 上传到GitHub.bat，或：
+powershell -ExecutionPolicy Bypass -File .\上传到GitHub.ps1 -DryRun   # 先看会做什么
+powershell -ExecutionPolicy Bypass -File .\上传到GitHub.ps1           # 推代码
+powershell -ExecutionPolicy Bypass -File .\上传到GitHub.ps1 -Tag v2.1.0   # 推代码 + 打 tag
 ```
+
+> **别直接敲 `.\上传到GitHub.ps1`。** Windows 默认不允许运行未签名的 `.ps1`，
+> 会报「未对文件进行数字签名，无法在当前系统上运行该脚本」。
+> 这不是脚本有问题，是系统对 PowerShell 脚本的默认防护。
+>
+> 两种绕开方式，都不改系统设置：
+>
+> | 方式 | 操作 |
+> |------|------|
+> | **推荐** | 双击 `上传到GitHub.bat`（默认走预演；要真推就 `上传到GitHub.bat -Tag v2.1.0`） |
+> | 命令行 | 用 `powershell -ExecutionPolicy Bypass -File ...` 的形式调用 |
+
+`上传到GitHub.bat` 里的 `-ExecutionPolicy Bypass` **只对那一次调用生效** ——
+不改注册表、不影响其它脚本、关掉窗口就没了。
 
 仓库里同时放三类东西，性质完全不同：
 
@@ -527,7 +541,7 @@ git 找仓库是"从当前目录逐级向上找 `.git`"，如果目标目录自�
 
 ```powershell
 .\打包版本.ps1                          # 1. 归档
-.\上传到GitHub.ps1 -Tag v2.1.0          # 2. 推代码 + 打 tag
+上传到GitHub.bat -Tag v2.1.0            # 2. 推代码 + 打 tag
 ```
 
 然后到 [Releases 页面](https://github.com/Sudfry/LocalCraft/releases/new)：
