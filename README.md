@@ -493,19 +493,51 @@ EXIF / ID3 / xlsx 解析全部自己实现，所以 exe 里塞得下一整套中
 ### 归档与上传
 
 ```powershell
-# 归档一个版本：源码包 + 程序包 + 文档快照 + SHA256 清单
+# 归档一个版本：源码包 + 程序包 + 文档快照 + SHA256 清单 → 发布\vX.Y.Z\
 .\打包版本.ps1
 
 # 推送到 GitHub
-.\上传到GitHub.ps1 -DryRun      # 先看会做什么
-.\上传到GitHub.ps1              # 真的推
+.\上传到GitHub.ps1 -DryRun              # 先看会做什么
+.\上传到GitHub.ps1                      # 推代码
+.\上传到GitHub.ps1 -Tag v2.1.0          # 推代码 + 打版本 tag
 ```
 
-`上传到GitHub.ps1` 会在暂存前**强制核对仓库根目录**（`git rev-parse --show-toplevel`）。
-这一步是必须的：git 找仓库是"从当前目录逐级向上找 `.git`"，如果目标目录自己没有
-`.git`，它会一路认到用户主目录 —— 而很多工具会在那里建一个 `.git`。
+仓库里同时放三类东西，性质完全不同：
+
+| 类别 | 内容 | 去哪 |
+|------|------|------|
+| **源码** | `src/` `tests/` `tools/` `webui/` `third_party/` | 推分支（别人 clone 下来编译） |
+| **软件** | `dist/` 里的 exe 和 dll | 推分支 + **挂到 Releases 附件** |
+| **介绍** | `README.md` `教程.md` `CHANGELOG.md` `docs/` | 推分支 |
+
+`上传到GitHub.ps1` 会在提交前做两件检查：
+
+1. **分类清点** —— 把即将上传的东西按上面三类列出来。混在一起很容易出事，
+   比如软件忘了重新构建，就会出现"README 说 2.1.0、下载的却是 2.0.0"。
+2. **版本一致性** —— 比对 `src/app.rc` 里的版本号和 `dist/LocalCraft.exe` 的实际版本号，
+   不一致就停下来（确认要以现状上传可以加 `-Force`）。
+
+它还做一件更要紧的事：**暂存前强制核对仓库根目录**（`git rev-parse --show-toplevel`）。
+git 找仓库是"从当前目录逐级向上找 `.git`"，如果目标目录自己没有 `.git`，
+它会一路认到用户主目录 —— 而很多工具会在那里建一个 `.git`。
 一旦认错，`git add -A` 会把整个主目录（含 `.bash_history`、SSH 密钥、浏览器数据）
 加进来，推到公开仓库就永久留在提交历史里了。
+
+### 发一个正式版本
+
+```powershell
+.\打包版本.ps1                          # 1. 归档
+.\上传到GitHub.ps1 -Tag v2.1.0          # 2. 推代码 + 打 tag
+```
+
+然后到 [Releases 页面](https://github.com/Sudfry/LocalCraft/releases/new)：
+标题填 `LocalCraft v2.1.0`，正文从 `CHANGELOG.md` 里对应那一段粘过去，
+把 `发布\v2.1.0.zip` 拖进附件区，点 Publish release。
+
+**附件不能忘。** 没有附件的话，别人只能拿源码自己编译 ——
+而这个项目的卖点之一恰恰是"解压双击就能用"。
+打包脚本会自动把附件准备好，剩下那两下点击得你自己来（上传附件需要令牌，
+不在脚本里存凭据）。
 
 ---
 

@@ -25,6 +25,11 @@
 .PARAMETER DryRun
     只显示将要执行的操作，不真的提交和推送。
 
+.PARAMETER Tag
+    顺便打一个版本 tag 并推送（如 -Tag v2.1.0）。
+    打完之后到 GitHub 的 Releases 页面把 发布\vX.Y.Z.zip 挂上去，
+    别人才能直接下载现成的程序，而不用自己编译。
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File 上传到GitHub.ps1
 
@@ -37,8 +42,8 @@
     powershell -ExecutionPolicy Bypass -File 上传到GitHub.ps1 -Force
 
 .EXAMPLE
-    # 明知不用记日志（比如只改了注释），跳过日志检查
-    powershell -ExecutionPolicy Bypass -File 上传到GitHub.ps1 -NoChangelogCheck
+    # 发一个正式版本：推代码 + 打 tag
+    powershell -ExecutionPolicy Bypass -File 上传到GitHub.ps1 -Tag v2.1.0
 #>
 [CmdletBinding()]
 param(
@@ -46,7 +51,8 @@ param(
     [string]$Branch  = "main",
     [string]$Message = "",
     [switch]$Force,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [string]$Tag = ""
 )
 
 # 这里刻意用 Continue 而不是 Stop。
@@ -435,6 +441,7 @@ Step 7 "推送到 GitHub"
 
 if ($DryRun) {
     Info "（预演）会执行：git push -u origin $Branch$(if ($Force -or $needForce) { ' --force' })"
+    if ($Tag) { Info "（预演）会创建并推送 tag: $Tag" }
     Write-Host ""
     Ok "预演结束，没有做任何改动。"
     exit 0
@@ -472,4 +479,46 @@ if (-not $tag) {
     Write-Host "  还没有打 tag。想发一个正式版本的话：" -ForegroundColor Gray
     Write-Host "    git tag -a v1.0 -m `"首个版本`" ; git push origin v1.0" -ForegroundColor Gray
     Write-Host ""
+}
+
+# ---------------------------------------------------------------- 8. 打 tag
+#
+# 源码和介绍推到分支上就够了，但**软件**要有正式版本可下载，
+# 得打一个 tag —— GitHub 才会在 Releases 里给它一个固定的下载入口。
+#
+# 这里只打 tag 并推上去。附件（发布\vX.Y.Z.zip）需要你在网页上挂：
+# 自动上传附件要用 GitHub API 或 gh 命令行，都得先有令牌。
+# 与其在这里存一份凭据，不如让你在网页上点两下。
+if ($Tag) {
+    Step 8 "打 tag"
+
+    if ($DryRun) {
+        Info "（预演）会创建并推送 tag: $Tag"
+    } else {
+        $tagExists = (& git -C $RepoRoot tag --list $Tag) 2>$null
+        if ($tagExists) {
+            Warn "tag $Tag 已存在，跳过创建（不覆盖已有的 tag）"
+        } else {
+            & git -C $RepoRoot tag -a $Tag -m "LocalCraft $Tag" 2>&1 | ForEach-Object { Info "  $_" }
+            if ($LASTEXITCODE -eq 0) { Ok "已创建 tag $Tag" } else { Warn "创建 tag 失败" }
+        }
+
+        & git -C $RepoRoot push origin $Tag 2>&1 | ForEach-Object { Info "  $_" }
+        if ($LASTEXITCODE -eq 0) {
+            Ok "tag 已推送"
+            Write-Host ""
+            Write-Host "  接下来把软件挂上去（这一步要在网页上做）：" -ForegroundColor White
+            Write-Host "    1. 打开 https://github.com/Sudfry/LocalCraft/releases/new?tag=$Tag" -ForegroundColor Cyan
+            Write-Host "    2. 标题填 LocalCraft $Tag" -ForegroundColor Cyan
+            Write-Host "    3. 正文从 CHANGELOG.md 里对应版本那一段粘过去" -ForegroundColor Cyan
+            Write-Host "    4. 把 发布\$Tag.zip 拖进下方的附件区" -ForegroundColor Cyan
+            Write-Host "    5. 点 Publish release" -ForegroundColor Cyan
+            Write-Host ""
+            Write-Host "  没有附件的话，别人只能拿源码自己编译 —— 而这个项目的卖点之一" -ForegroundColor Gray
+            Write-Host "  恰恰是「解压双击就能用」。所以附件别忘。" -ForegroundColor Gray
+            Write-Host ""
+        } else {
+            Warn "tag 推送失败（分支已经推上去了，tag 可以稍后单独重试）"
+        }
+    }
 }
