@@ -91,6 +91,10 @@
         <svg viewBox="0 0 24 24"><path d="M4 8.5h13M4 8.5l3-3M4 8.5l3 3"/><path d="M20 15.5H7M20 15.5l-3-3M20 15.5l-3 3"/></svg>
         <span>格式转换</span>
       </button>
+      <button class="nav-item" data-view="findrep">
+        <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.4 15.4 20.5 20.5"/><path d="M7.8 10.5h5.4"/></svg>
+        <span>文本替换</span>
+      </button>
       <button class="nav-item" data-view="dedup">
         <svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="11" height="11" rx="1.6"/><rect x="9.5" y="9.5" width="11" height="11" rx="1.6"/></svg>
         <span>内容去重</span>
@@ -98,6 +102,18 @@
       <button class="nav-item" data-view="summary">
         <svg viewBox="0 0 24 24"><path d="M5 4.5h11l3.5 3.5v11.5H5z"/><path d="M8 9.5h8M8 12.5h8M8 15.5h5"/></svg>
         <span>文档摘要</span>
+      </button>
+      <button class="nav-item" data-view="backup">
+        <svg viewBox="0 0 24 24"><path d="M4 7.5c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z"/><path d="M4 7.5v9c0 1.7 3.6 3 8 3s8-1.3 8-3v-9"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
+        <span>备份同步</span>
+      </button>
+      <button class="nav-item" data-view="watch">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2"/><path d="M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M17.3 6.7l-1.4 1.4M8.1 15.9l-1.4 1.4"/></svg>
+        <span>实时监控</span>
+      </button>
+      <button class="nav-item" data-view="table">
+        <svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="1.8"/><path d="M3.5 9.5h17M9 9.5v10M15 9.5v10"/></svg>
+        <span>表格处理</span>
       </button>
     </nav>
 
@@ -180,18 +196,84 @@
           </div>
           <input type="text" id="rename-template" class="input mono input-lg"
                  placeholder="例如：{date}_{n:03d}{ext}">
+
+          <!-- 现成的模板，点一下就填进去。光给变量名用户还是不知道该怎么拼。 -->
+          <div class="chips">
+            <span class="chip-label">常用模板</span>
+            <button class="chip" data-set="rename-template" data-token="{date}_{n:03d}{ext}">日期+序号</button>
+            <button class="chip" data-set="rename-template" data-token="{date}_{name}{ext}">日期+原名</button>
+            <button class="chip" data-set="rename-template" data-token="{name}_{n:03d}{ext}">原名+序号</button>
+            <button class="chip" data-set="rename-template" data-token="{parent}_{n:04d}{ext}">上级目录+序号</button>
+            <button class="chip" data-set="rename-template" data-token="{year}-{month}-{day}_{n:03d}{ext}">年-月-日</button>
+            <button class="chip" data-set="rename-template" data-token="照片 {n:03d}{ext}">照片 001</button>
+            <button class="chip" data-set="rename-template" data-token="{name}{ext}">保持原名</button>
+            <button class="chip" data-set="rename-template" data-token="">清空</button>
+          </div>
+
           <div class="chips">
             <span class="chip-label">插入变量</span>
             <button class="chip" data-insert="rename-template" data-token="{name}">原名</button>
             <button class="chip" data-insert="rename-template" data-token="{ext}">扩展名</button>
+            <button class="chip" data-insert="rename-template" data-token="{extname}">扩展名（无点）</button>
             <button class="chip" data-insert="rename-template" data-token="{n:03d}">序号</button>
+            <button class="chip" data-insert="rename-template" data-token="{i:03d}">索引</button>
             <button class="chip" data-insert="rename-template" data-token="{date}">日期</button>
+            <button class="chip" data-insert="rename-template" data-token="{time}">时间</button>
             <button class="chip" data-insert="rename-template" data-token="{year}">年</button>
             <button class="chip" data-insert="rename-template" data-token="{month}">月</button>
+            <button class="chip" data-insert="rename-template" data-token="{day}">日</button>
             <button class="chip" data-insert="rename-template" data-token="{parent}">上级目录</button>
             <button class="chip" data-insert="rename-template" data-token="{size}">字节数</button>
+            <button class="chip" data-insert="rename-template" data-token="{mtime:%Y-%m-%d}">修改日期</button>
           </div>
-          <p class="hint">模板里写了 <code>{ext}</code> 就是完整文件名；没写则自动保留原扩展名。</p>
+
+          <div class="chips">
+            <span class="chip-label">照片 EXIF</span>
+            <button class="chip" data-insert="rename-template" data-token="{exif:date}">拍摄日期</button>
+            <button class="chip" data-insert="rename-template" data-token="{exif:date:%Y%m%d}">拍摄日期紧凑</button>
+            <button class="chip" data-insert="rename-template" data-token="{exif:year}">拍摄年份</button>
+            <button class="chip" data-insert="rename-template" data-token="{exif:model}">相机型号</button>
+            <button class="chip" data-insert="rename-template" data-token="{exif:make}">相机厂商</button>
+            <button class="chip" data-insert="rename-template" data-token="{exif:lens}">镜头</button>
+            <button class="chip" data-insert="rename-template" data-token="{exif:focal}">焦距</button>
+            <button class="chip" data-insert="rename-template" data-token="{exif:fnum}">光圈</button>
+            <button class="chip" data-insert="rename-template" data-token="{exif:exposure}">快门</button>
+            <button class="chip" data-insert="rename-template" data-token="{exif:iso}">ISO</button>
+          </div>
+
+          <div class="chips">
+            <span class="chip-label">音乐 ID3</span>
+            <button class="chip" data-insert="rename-template" data-token="{id3:artist}">艺术家</button>
+            <button class="chip" data-insert="rename-template" data-token="{id3:title}">标题</button>
+            <button class="chip" data-insert="rename-template" data-token="{id3:album}">专辑</button>
+            <button class="chip" data-insert="rename-template" data-token="{id3:track}">音轨号</button>
+            <button class="chip" data-insert="rename-template" data-token="{id3:year}">年份</button>
+          </div>
+
+          <div class="chips">
+            <span class="chip-label">按元数据</span>
+            <button class="chip" data-set="rename-template" data-token="{exif:date:%Y%m%d}_{n:03d}{ext}">照片按拍摄日</button>
+            <button class="chip" data-set="rename-template" data-token="{exif:date:%Y-%m-%d}_{exif:model}_{n:03d}{ext}">照片带机型</button>
+            <button class="chip" data-set="rename-template" data-token="{id3:artist} - {id3:title}{ext}">音乐 歌手-歌名</button>
+            <button class="chip" data-set="rename-template" data-token="{id3:track:02d} {id3:title}{ext}">音乐 音轨-歌名</button>
+          </div>
+
+          <p class="hint">
+            <b>关于扩展名</b>：模板里只要出现 <code>{ext}</code> 或 <code>{extname}</code>，
+            程序就认为你已经自己安排好了扩展名；没写的话会自动补上原扩展名。<br>
+            <b>序号写法</b>：<code>{n:03d}</code> 补零到 3 位（<code>001</code>），
+            <code>{n:5d}</code> 补零到 5 位，<code>{n}</code> 不补零。索引 <code>{i}</code> 同理。<br>
+            <b>日期写法</b>：<code>{date}</code>=<code>20261016</code>、
+            <code>{time}</code>=<code>143025</code>，
+            也可以自定义 <code>{mtime:%Y-%m-%d}</code>。<br>
+            <b>关于 EXIF / ID3</b>：<code>{date}</code> 用的是文件修改时间，
+            <code>{exif:date}</code> 用的是<b>照片的拍摄时间</b>，两者常常不是同一天。
+            EXIF 只对 JPEG / TIFF / 各类相机原始格式有效，ID3 只对音频文件有效；
+            读取期间<b>不会联网、不会修改文件</b>。<br>
+            <b>读不到元数据时</b>：那个位置会写成 <code>未知</code>，
+            比如 <code>未知_未知_005.jpg</code>。这样预览表里一眼就能看出
+            哪些文件没有元数据，你可以去掉那几行，而不是让文件名里出现一个看不出原因的空洞。
+          </p>
         </div>
 
         <div class="grid-2">
@@ -334,6 +416,29 @@
           </div>
         </div>
 
+        <div class="card" id="category-card">
+          <div class="card-head">
+            <h2>自定义分类</h2>
+            <p>用 <code>{category}</code> 归类时，先按你自己定的规则匹配；没命中的再走内置规则。</p>
+          </div>
+          <div class="cat-head">
+            <span class="cat-count" id="category-count">载入中…</span>
+            <span class="cat-actions">
+              <button class="btn btn-quiet" id="btn-category-reload">重新载入</button>
+              <button class="btn btn-quiet" id="btn-category-open">打开配置文件</button>
+            </span>
+          </div>
+          <div id="category-list" class="cat-list"></div>
+          <div class="cat-path">配置文件：<code id="category-path">—</code></div>
+          <div class="callout callout-info">
+            <b>怎么加自己的分类</b>
+            <span>在配置文件里照抄一段 <code>[分类名]</code>，写上 <code>ext</code>（扩展名）、
+              <code>name</code>（文件名里含有的词）或 <code>name_regex</code>（正则）就行。
+              文件里自带写法和例子，示例默认是注释状态，把行首的分号去掉就能启用。</span>
+          </div>
+          <div class="callout callout-warn" id="category-warn" hidden></div>
+        </div>
+
         <div class="actions">
           <button class="btn btn-primary btn-lg" id="btn-organize-preview">
             <svg viewBox="0 0 24 24"><path d="M2.6 12S6 5.6 12 5.6 21.4 12 21.4 12 18 18.4 12 18.4 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.7"/></svg>
@@ -343,6 +448,256 @@
         </div>
       </section>
 
+      <!-- ─────────── 表格处理 ─────────── -->
+      <section class="view" id="view-table">
+        <div class="card">
+          <div class="card-head">
+            <h2>文件夹</h2>
+            <p>扫描是只读的。表格读出来做筛选、排序、选列、合并，结果写成 CSV。</p>
+          </div>
+          <div class="picker-row">
+            <span class="picker-icon">
+              <svg viewBox="0 0 24 24"><path d="M3.5 6.8A1.8 1.8 0 0 1 5.3 5h3.6l1.5 1.9h7.3a1.8 1.8 0 0 1 1.8 1.8v7.5a1.8 1.8 0 0 1-1.8 1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z"/></svg>
+            </span>
+            <input type="text" id="table-dir" class="input input-lg" placeholder="点击右侧按钮选择…">
+            <button class="btn btn-primary" data-pick="table-dir">选择文件夹</button>
+          </div>
+          <div class="actions" style="margin-top:14px">
+            <button class="btn btn-quiet" id="btn-table-scan">只读扫描</button>
+            <span class="actions-hint">先看看有哪些表格、各有哪些列。</span>
+          </div>
+        </div>
+
+        <div class="card" id="table-files-card" hidden>
+          <div class="card-head"><h2>找到的表格</h2>
+            <p id="table-files-note">勾选要参与处理的文件；选多个就是合并。</p></div>
+          <div class="table-wrap" style="max-height:280px">
+            <table class="table">
+              <thead><tr><th style="width:52px"></th><th>文件</th><th style="width:100px">规模</th><th>表头</th></tr></thead>
+              <tbody id="table-files"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>筛选</h2>
+              <p>只保留满足条件的行。列号从 0 开始。</p></div>
+            <div class="field-row three">
+              <div class="field"><label>列号</label><input type="number" id="table-fcol" class="input" placeholder="留空 = 不筛"></div>
+              <div class="field"><label>条件</label>
+                <select id="table-fmode" class="input">
+                  <option value="contains">包含</option>
+                  <option value="notcontains">不包含</option>
+                  <option value="eq">等于</option>
+                  <option value="ne">不等于</option>
+                  <option value="gt">大于</option>
+                  <option value="lt">小于</option>
+                  <option value="empty">为空</option>
+                  <option value="notempty">不为空</option>
+                </select></div>
+              <div class="field"><label>值</label><input type="text" id="table-fvalue" class="input"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>排序与选列</h2>
+              <p>都留空就不动。</p></div>
+            <div class="field-row">
+              <div class="field"><label>排序列号</label><input type="number" id="table-scol" class="input" placeholder="留空 = 不排序"></div>
+              <div class="field"><label>只保留这些列</label><input type="text" id="table-keep" class="input mono" placeholder="如 0,2,3"></div>
+            </div>
+            <div class="field-row" style="margin-top:10px">
+              <label class="switch"><input type="checkbox" id="table-snum"><span></span><em>按数值排序</em></label>
+              <label class="switch"><input type="checkbox" id="table-sdesc"><span></span><em>降序</em></label>
+            </div>
+            <div class="field"><label>输出文件名</label>
+              <input type="text" id="table-out" class="input"> </div>
+            <div class="field"><label>输出编码</label>
+              <select id="table-enc" class="input">
+                <option value="utf8bom">UTF-8（带 BOM，推荐）</option>
+                <option value="gbk">GBK（老工具用）</option>
+              </select></div>
+            <div class="callout callout-info">
+              <b>为什么输出 CSV 而不是 xlsx</b>
+              <span>CSV 用 Excel / WPS / 记事本都能打开。中文 Excel 默认按 GBK
+                打开 CSV，所以默认写带 BOM 的 UTF-8 —— BOM 能让它认出编码，
+                不然中文会满屏乱码。</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary btn-lg" id="btn-table-preview">
+            <svg viewBox="0 0 24 24"><path d="M2.6 12S6 5.6 12 5.6 21.4 12 21.4 12 18 18.4 12 18.4 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.7"/></svg>
+            生成预览
+          </button>
+          <span class="actions-hint">预览里会列出产物路径，确认后才写出。</span>
+        </div>
+      </section>
+      <!-- ─────────── 实时监控 ─────────── -->
+      <section class="view" id="view-watch">
+        <div class="card">
+          <div class="card-head">
+            <h2>文件夹监控</h2>
+            <p>盯着一个文件夹，把<b>刚刚发生变化</b>的文件记下来，等你去处理。</p>
+          </div>
+          <div class="picker-row">
+            <span class="picker-icon">
+              <svg viewBox="0 0 24 24"><path d="M3.5 6.8A1.8 1.8 0 0 1 5.3 5h3.6l1.5 1.9h7.3a1.8 1.8 0 0 1 1.8 1.8v7.5a1.8 1.8 0 0 1-1.8 1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z"/></svg>
+            </span>
+            <input type="text" id="watch-dir" class="input input-lg" placeholder="点击右侧按钮选择要盯的文件夹…">
+            <button class="btn btn-primary" data-pick="watch-dir">选择文件夹</button>
+          </div>
+          <label class="switch" style="margin-top:14px">
+            <input type="checkbox" id="watch-recursive" checked><span></span><em>包含子文件夹</em>
+          </label>
+          <div class="callout callout-info">
+            <b>监控不会自己动你的文件</b>
+            <span>它只负责<b>发现</b> —— 变化的文件会进到下面的队列里，
+              要怎么处理由你点一下再说，仍然走「先预览、再执行、可回退」那一套。<br>
+              常见的「监控到就自动处理」和这个程序的核心承诺是冲突的：
+              自动处理意味着你还没看过预览，文件就已经被动了。</span>
+          </div>
+          <div class="actions" style="margin-top:14px">
+            <button class="btn btn-primary" id="btn-watch-start">开始监控</button>
+            <button class="btn btn-quiet" id="btn-watch-stop" disabled>停止监控</button>
+            <span class="watch-state" id="watch-state">未开始</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>变化队列</h2>
+            <p id="watch-summary">还没有开始监控。</p>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr>
+                <th style="width:80px">变化</th>
+                <th>文件</th>
+                <th style="width:90px">次数</th>
+                <th style="width:150px">最近一次</th>
+              </tr></thead>
+              <tbody id="watch-items">
+                <tr><td colspan="4"><div class="empty">
+                  <h3>队列是空的</h3>
+                  <p>选好文件夹点「开始监控」，之后往里面放文件或改文件，这里就会出现。</p>
+                </div></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-foot" id="watch-foot"></div>
+          <div class="actions" style="margin-top:14px">
+            <button class="btn btn-primary" id="btn-watch-preview" disabled>
+              <svg viewBox="0 0 24 24"><path d="M2.6 12S6 5.6 12 5.6 21.4 12 21.4 12 18 18.4 12 18.4 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.7"/></svg>
+              整理这些文件
+            </button>
+            <button class="btn btn-quiet" id="btn-watch-clear" disabled>清空队列</button>
+            <span class="actions-hint">会按「整理分类」的规则生成预览，确认后才动手。</span>
+          </div>
+        </div>
+      </section>
+      <!-- ─────────── 备份同步 ─────────── -->
+      <section class="view" id="view-backup">
+        <ol class="stepper" data-stepper="backup">
+          <li class="is-done"><b>1</b><span>选择源和目标</span></li>
+          <li><b>2</b><span>设置范围</span></li>
+          <li><b>3</b><span>预览确认</span></li>
+          <li><b>4</b><span>执行 / 回退</span></li>
+        </ol>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>源文件夹</h2>
+            <p>要备份的内容。扫描阶段只读，不会改动源里的任何东西。</p>
+          </div>
+          <div class="picker-row">
+            <span class="picker-icon">
+              <svg viewBox="0 0 24 24"><path d="M3.5 6.8A1.8 1.8 0 0 1 5.3 5h3.6l1.5 1.9h7.3a1.8 1.8 0 0 1 1.8 1.8v7.5a1.8 1.8 0 0 1-1.8 1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z"/></svg>
+            </span>
+            <input type="text" id="backup-src" class="input input-lg" placeholder="点击右侧按钮选择…">
+            <button class="btn btn-primary" data-pick="backup-src">选择文件夹</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>目标文件夹</h2>
+            <p>备份写到哪。目录结构会和源保持一致。</p>
+          </div>
+          <div class="picker-row">
+            <span class="picker-icon">
+              <svg viewBox="0 0 24 24"><path d="M3.5 6.8A1.8 1.8 0 0 1 5.3 5h3.6l1.5 1.9h7.3a1.8 1.8 0 0 1 1.8 1.8v7.5a1.8 1.8 0 0 1-1.8 1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z"/></svg>
+            </span>
+            <input type="text" id="backup-dst" class="input input-lg" placeholder="点击右侧按钮选择…">
+            <button class="btn btn-primary" data-pick="backup-dst">选择文件夹</button>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>同步方式</h2>
+              <p>已经一模一样的文件不会重复复制。</p></div>
+            <label class="switch mb"><input type="checkbox" id="backup-recursive" checked><span></span><em>包含子文件夹</em></label>
+            <label class="switch mb"><input type="checkbox" id="backup-skiphidden" checked><span></span><em>跳过隐藏文件</em></label>
+            <label class="switch mb"><input type="checkbox" id="backup-strict"><span></span><em>严格比对（按内容哈希，慢但准）</em></label>
+            <div class="callout callout-info">
+              <b>怎么判断"已经一样"</b>
+              <span>默认比<b>体积 + 修改时间</b>，和 robocopy 的做法一致，快得多。
+                勾上「严格比对」才会逐字节算哈希 ——
+                能抓住"体积和时间都一样、内容其实不同"的少数情况，但大目录会明显变慢。</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>筛选</h2>
+              <p>留空就全部处理。逗号分隔。</p></div>
+            <div class="field">
+              <label>只复制这些扩展名</label>
+              <input type="text" id="backup-include" class="input mono" placeholder="例如：jpg, mp4, docx">
+            </div>
+            <div class="field">
+              <label>跳过这些扩展名</label>
+              <input type="text" id="backup-exclude" class="input mono" placeholder="例如：tmp, bak">
+            </div>
+            <div class="field">
+              <label>超过这个体积就跳过（MB）</label>
+              <input type="text" id="backup-maxmb" class="input mono" value="8192">
+            </div>
+            <div class="callout callout-warn">
+              <b>只增不删</b>
+              <span>这是刻意的。真正的"镜像"工具会删掉目标里多余的文件，
+                而这个程序承诺<b>没有不可逆的删除</b> —— 一次误操作把目标设成 D:\，
+                镜像就会清掉整个盘且恢复不了。所以这里只做「补齐和更新」，
+                <b>不会删除目标里的任何东西</b>。需要真镜像请用别的工具。</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-quiet btn-lg" id="btn-backup-scan">
+            <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.4 15.4 20.5 20.5"/></svg>
+            只读分析
+          </button>
+          <button class="btn btn-primary btn-lg" id="btn-backup-preview">
+            <svg viewBox="0 0 24 24"><path d="M2.6 12S6 5.6 12 5.6 21.4 12 21.4 12 18 18.4 12 18.4 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.7"/></svg>
+            生成预览
+          </button>
+          <span class="actions-hint">先分析看差多少，再生成预览进入执行流程。</span>
+        </div>
+
+        <div class="card" id="backup-result" hidden>
+          <div class="card-head"><h2>分析结果</h2><p id="backup-summary"></p></div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th style="width:64px">状态</th><th>相对路径</th><th style="width:110px">体积</th></tr></thead>
+              <tbody id="backup-items"></tbody>
+            </table>
+          </div>
+          <div class="table-foot" id="backup-foot"></div>
+        </div>
+      </section>
       <!-- ─────────── 格式转换 ─────────── -->
       <section class="view" id="view-convert">
         <ol class="stepper" data-stepper="convert">
@@ -390,6 +745,101 @@
             生成预览
           </button>
           <span class="actions-hint">会列出每个源文件将生成哪个新文件，确认后才会转换。</span>
+        </div>
+      </section>
+
+      <!-- ─────────── 文本批量查找替换 ─────────── -->
+      <section class="view" id="view-findrep">
+        <ol class="stepper" data-stepper="findrep">
+          <li class="is-done"><b>1</b><span>选择文件夹</span></li>
+          <li><b>2</b><span>填写查找替换</span></li>
+          <li><b>3</b><span>预览确认</span></li>
+          <li><b>4</b><span>执行 / 回退</span></li>
+        </ol>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>文件夹</h2>
+            <p>扫描是只读的；真正改写文件内容发生在你确认之后，原内容会先进回收站。</p>
+          </div>
+          <div class="picker-row">
+            <span class="picker-icon">
+              <svg viewBox="0 0 24 24"><path d="M3.5 6.8A1.8 1.8 0 0 1 5.3 5h3.6l1.5 1.9h7.3a1.8 1.8 0 0 1 1.8 1.8v7.5a1.8 1.8 0 0 1-1.8 1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z"/></svg>
+            </span>
+            <input type="text" id="findrep-dir" class="input input-lg" placeholder="点击右侧按钮选择…">
+            <button class="btn btn-primary" data-pick="findrep-dir">选择文件夹</button>
+          </div>
+          <div class="scanbar" id="findrep-scanbar" hidden>
+            <span class="scanbar-dot"></span><span id="findrep-scan-text"></span>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>查找</h2>
+              <p>字面量或正则；匹配的是<b>文本内容</b>，不是文件名。</p></div>
+            <div class="field">
+              <input type="text" id="findrep-find" class="input mono" placeholder="要查找的内容">
+            </div>
+            <div class="field">
+              <label>替换为</label>
+              <input type="text" id="findrep-replace" class="input mono" placeholder="留空 = 删除匹配内容">
+            </div>
+            <div class="field-row">
+              <label class="switch"><input type="checkbox" id="findrep-regex"><span></span><em>正则表达式</em></label>
+              <label class="switch"><input type="checkbox" id="findrep-icase"><span></span><em>忽略大小写</em></label>
+            </div>
+            <p class="hint">
+              正则支持捕获组替换，例如查找 <code>(\d+)-(\d+)</code> 替换为 <code>$2-$1</code>。
+            </p>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>处理范围</h2>
+              <p>默认只处理文本类文件，并且会跳过二进制内容。</p></div>
+            <label class="switch mb"><input type="checkbox" id="findrep-recursive" checked><span></span><em>包含子文件夹</em></label>
+            <label class="switch mb"><input type="checkbox" id="findrep-anyext"><span></span><em>不限扩展名（靠内容判断）</em></label>
+            <div class="field">
+              <label>只处理这些扩展名（留空 = 内置文本名单）</label>
+              <input type="text" id="findrep-include" class="input mono" placeholder="例如：txt, md, csv">
+            </div>
+            <div class="field">
+              <label>跳过这些扩展名</label>
+              <input type="text" id="findrep-exclude" class="input mono" placeholder="例如：json, log">
+            </div>
+            <div class="field">
+              <label>超过这个体积就跳过（MB）</label>
+              <input type="text" id="findrep-maxmb" class="input mono" value="64">
+            </div>
+            <div class="callout callout-info">
+              <b>二进制文件会被自动跳过</b>
+              <span>含 NUL 字节或控制字符过多的文件一律不动 —— 否则对 exe、jpg 做「文本替换」会直接损坏文件。</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-quiet btn-lg" id="btn-findrep-scan">
+            <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.4 15.4 20.5 20.5"/></svg>
+            只读扫描
+          </button>
+          <button class="btn btn-primary btn-lg" id="btn-findrep-preview">
+            <svg viewBox="0 0 24 24"><path d="M2.6 12S6 5.6 12 5.6 21.4 12 21.4 12 18 18.4 12 18.4 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.7"/></svg>
+            生成预览
+          </button>
+          <span class="actions-hint">先「只读扫描」看命中情况，再「生成预览」进入执行流程。</span>
+        </div>
+
+        <div class="card" id="findrep-result" hidden>
+          <div class="card-head"><h2>扫描结果</h2>
+            <p id="findrep-summary"></p></div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th style="width:70px">行号</th><th>改前</th><th>改后</th></tr></thead>
+              <tbody id="findrep-hits"></tbody>
+            </table>
+          </div>
+          <div class="table-foot" id="findrep-foot"></div>
         </div>
       </section>
 

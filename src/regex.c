@@ -1471,3 +1471,55 @@ int regex_replace_all(LcRegex *re, const wchar_t *input, const wchar_t *repl,
     }
     return 0;
 }
+
+/*
+ * 统计匹配次数。返回匹配个数；出错返回 -1。
+ *
+ * 为什么单独加一个：批量文本查找替换要先在预览阶段告诉用户
+ * "这个文件里有 37 处匹配"，而不是先替换再看结果。
+ * 计数和替换必须用**同一套**迭代规则 —— 否则会出现
+ * "预览说 37 处、执行完只改了 36 处"这种对不上的情况。
+ * 所以这里刻意复用上面的推进逻辑（含空匹配的处理），
+ * 只把"写出结果"换成"计数"。
+ *
+ * 同样受时间预算限制：模式极端复杂时宁可少数几个，也不会卡住界面。
+ */
+int regex_count_matches(LcRegex *re, const wchar_t *input) {
+    int      caps[LC_NCAPS];
+    size_t   len, from;
+    ULONGLONG deadline;
+    int      count = 0;
+
+    if (!re) return -1;
+    if (!input) input = L"";
+
+    len      = wcslen(input);
+    from     = 0;
+    deadline = lc_now_ms() + LC_TIME_BUDGET_MS;
+
+    while (from <= len) {
+        if (lc_now_ms() >= deadline) break;
+
+        int rc = vm_search_ex(re, input, len, from, caps, deadline);
+        if (rc < 0) return -1;
+        if (rc == 0) break;                       /* 没有更多匹配 */
+
+        if (caps[0] < 0) caps[0] = (int)from;
+        if (caps[1] < caps[0]) caps[1] = (int)from;
+        if ((size_t)caps[0] > len) caps[0] = (int)len;
+        if ((size_t)caps[1] > len) caps[1] = (int)len;
+        if (caps[1] < caps[0])     caps[1] = caps[0];
+
+        count++;
+
+        if (caps[1] > caps[0]) {
+            from = (size_t)caps[1];               /* 非空匹配：正常前进 */
+        } else {
+            if ((size_t)caps[0] < len)
+                from = (size_t)caps[0] + 1u;      /* 空匹配：手工吃一个字符 */
+            else
+                break;                            /* 串尾的空匹配只算一次 */
+        }
+    }
+    return count;
+}

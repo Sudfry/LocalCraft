@@ -1,4 +1,4 @@
-#pragma code_page(65001)
+﻿#pragma code_page(65001)
 #include <windows.h>
 
 /* 应用图标。
@@ -14,8 +14,8 @@
 
 /* 版本信息：右键属性里能看到 */
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1,0,0,0
-PRODUCTVERSION  1,0,0,0
+FILEVERSION     2,1,0,0
+PRODUCTVERSION  2,1,0,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          VOS_NT_WINDOWS32
@@ -29,11 +29,11 @@ BEGIN
             VALUE "CompanyName",      "Sudfry"
             VALUE "LegalCopyright",   "© Sudfry. 保留所有权利。"
             VALUE "FileDescription",  "LocalCraft 本地文件处理工具（完全离线）"
-            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "FileVersion",      "2.1.0.0"
             VALUE "InternalName",     "LocalCraft"
             VALUE "OriginalFilename", "LocalCraft.exe"
             VALUE "ProductName",      "LocalCraft"
-            VALUE "ProductVersion",   "1.0.0.0"
+            VALUE "ProductVersion",   "2.1.0.0"
         END
     END
     BLOCK "VarFileInfo"

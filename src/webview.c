@@ -34,6 +34,10 @@
 #define LCWV_HOST   L"https://localcraft/"
 #define LCWV_CLASS  L"LocalCraftWebView"
 
+/* 自定义消息：让窗口重新把 WebView2 对齐到客户区。
+   用 PostMessage 投递，保证在 WebView2 的回调返回之后才执行。 */
+#define WM_LC_RESYNC (WM_APP + 1)
+
 /* ==================================================== 全局 ============== */
 
 static PFN_CreateCoreWebView2EnvironmentWithOptions pCreateEnv = NULL;
@@ -305,6 +309,18 @@ static void serve(ICoreWebView2WebResourceRequestedEventArgs *args) {
         wv_log(L"  -> JSON %d 字节 %ls", (int)wrap.len,
                strstr(wrap.data ? wrap.data : "", "\"ok\":false") ? L"(业务错误)" : L"(ok)");
         str_free(&out); str_free(&err); str_free(&wrap);
+
+        /*
+         * 这里可能刚跑完一个模态对话框（「选择文件夹」这类按钮走的接口）。
+         *
+         * 对话框是在 WebView2 的 WebResourceRequested 回调栈里弹的，
+         * 期间它开了自己的嵌套消息循环。对话框关掉之后，WebView2 不一定
+         * 会重新对齐自己的显示区域 —— 结果就是界面上出现错位或空条。
+         *
+         * 用 PostMessage 而不是直接调用：这样重新对齐发生在回调**返回之后**，
+         * 不会在 WebView2 的回调栈里再插一层。
+         */
+        if (g_hwnd) PostMessageW(g_hwnd, WM_LC_RESYNC, 0, 0);
         CoTaskMemFree(uri);
         release_i(req);
         return;
@@ -517,14 +533,122 @@ static HRESULT STDMETHODCALLTYPE on_controller_created(
 
 /* ==================================================== 窗口过程 ========== */
 
+/*
+ * 页面的底色，用来擦窗口背景。
+ *
+ * 为什么需要它：WebView2 是独立合成层，和窗口客户区对齐需要一小段时间。
+ * 这段时间里露出来的是窗口背景刷的颜色。默认是 COLOR_BTNFACE（浅灰），
+ * 在深色界面下会闪一条刺眼的亮边 —— 视觉上很像"界面坏了"。
+ * 用页面自己的底色，这条边就看不见了。
+ *
+ * 跟随系统的"应用模式"设置，和 styles.css 里
+ * @media (prefers-color-scheme: dark) 用的是同一个值。
+ */
+static COLORREF page_bg(void) {
+    DWORD light = 1, sz = sizeof(light);
+    HKEY k = NULL;
+    LONG r = RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        0, KEY_READ, &k);
+    if (r == ERROR_SUCCESS && k) {
+        if (RegQueryValueExW(k, L"AppsUseLightTheme", NULL, NULL,
+                             (LPBYTE)&light, &sz) != ERROR_SUCCESS) {
+            light = 1;
+        }
+        RegCloseKey(k);
+    }
+    /* 浅色 #f2f3f6 / 深色 #0f1115，与 --canvas 一致 */
+    return light ? RGB(0xF2, 0xF3, 0xF6) : RGB(0x0F, 0x11, 0x15);
+}
+
+/*
+ * 把 WebView2 的显示区域对齐到窗口客户区。
+ *
+ * 这个函数是"界面错乱"这类问题的关键。WebView2 是独立的合成层，
+ * 它的大小由 put_Bounds 单独控制，**不会**跟着窗口客户区自动同步。
+ * 一旦两者对不上，症状就是：边上露出一条窗口底色、内容被裁掉一角、
+ * 或者整块内容偏移 —— 看着就是"错乱"。
+ *
+ * 下面三个判断都是必要的：
+ *
+ *   1. 最小化时不设边界。此时 GetClientRect 返回 0×0，
+ *      把 WebView2 设成 0×0 之后再还原，它往往不会自己恢复。
+ *
+ *   2. 尺寸为 0 时同样跳过。窗口创建过程中也会出现短暂的 0 尺寸。
+ *
+ *   3. 只在真的变了的时候才调 put_Bounds。它会触发一次内部重排，
+ *      拖动窗口时会连续收到 WM_SIZE，无脑调用纯属浪费。
+ */
+static void wv_apply_bounds(HWND h) {
+    if (!g_ctrl) return;
+    if (IsIconic(h)) return;
+
+    RECT rc;
+    GetClientRect(h, &rc);
+    if (rc.right <= 0 || rc.bottom <= 0) return;
+
+    RECT cur;
+    if (SUCCEEDED(g_ctrl->lpVtbl->get_Bounds(g_ctrl, &cur))) {
+        if (cur.left == rc.left && cur.top == rc.top &&
+            cur.right == rc.right && cur.bottom == rc.bottom) {
+            return;                       /* 没变，不用折腾 */
+        }
+    }
+    g_ctrl->lpVtbl->put_Bounds(g_ctrl, rc);
+}
+
 static LRESULT CALLBACK wv_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
     case WM_SIZE:
-        if (g_ctrl) {
-            RECT rc;
-            GetClientRect(h, &rc);
-            g_ctrl->lpVtbl->put_Bounds(g_ctrl, rc);
+        wv_apply_bounds(h);
+        return 0;
+
+    /*
+     * 下面几个都会导致客户区尺寸变化，但**不一定**会发 WM_SIZE：
+     *   WM_DPICHANGED      —— 跨显示器拖动，或系统缩放被改
+     *   WM_DISPLAYCHANGE   —— 分辨率 / 显示器数量变化
+     *   WM_EXITSIZEMOVE    —— 拖动缩放结束
+     *   WM_SHOWWINDOW      —— 从隐藏变可见
+     * 早期版本只处理了 WM_SIZE，所以这些情况下 WebView2 的大小会停在旧值，
+     * 与客户区错开 —— 这正是画面看着不对劲的原因之一。
+     */
+    case WM_EXITSIZEMOVE:
+    case WM_DISPLAYCHANGE:
+        wv_apply_bounds(h);
+        return 0;
+
+    case WM_DPICHANGED: {
+        /* 系统把建议的新窗口矩形放在 lParam 里，先照做，再重算边界 */
+        RECT *nr = (RECT *)l;
+        if (nr) {
+            SetWindowPos(h, NULL, nr->left, nr->top,
+                         nr->right - nr->left, nr->bottom - nr->top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
         }
+        wv_apply_bounds(h);
+        return 0;
+    }
+
+    case WM_SHOWWINDOW:
+        if (w) wv_apply_bounds(h);
+        break;
+
+    case WM_ERASEBKGND: {
+        static HBRUSH bg = NULL;
+        if (!bg) bg = CreateSolidBrush(page_bg());
+        RECT rc;
+        GetClientRect(h, &rc);
+        FillRect((HDC)w, &rc, bg);
+        return 1;
+    }
+
+    case WM_LC_RESYNC:
+        /*
+         * 一个接口调用刚结束 —— 期间可能弹过模态对话框（「选择文件夹」之类）。
+         * 对话框关掉后 WebView2 未必会自己重新对齐，这里补一次。
+         * 消息是 Post 过来的，所以此刻已经不在 WebView2 的回调栈里了。
+         */
+        wv_apply_bounds(h);
         return 0;
 
     case WM_SETFOCUS:
@@ -586,7 +710,7 @@ int lc_webview_run(ApiState *api, const wchar_t *token) {
     wc.lpfnWndProc = wv_proc;
     wc.hInstance = hi;
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.hbrBackground = CreateSolidBrush(page_bg());
     wc.lpszClassName = LCWV_CLASS;
     wc.hIcon = lc_app_icon(0);
     wc.hIconSm = lc_app_icon(1);

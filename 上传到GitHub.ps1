@@ -35,6 +35,10 @@
 .EXAMPLE
     # 远程已有 README，以本地为准覆盖掉
     powershell -ExecutionPolicy Bypass -File 上传到GitHub.ps1 -Force
+
+.EXAMPLE
+    # 明知不用记日志（比如只改了注释），跳过日志检查
+    powershell -ExecutionPolicy Bypass -File 上传到GitHub.ps1 -NoChangelogCheck
 #>
 [CmdletBinding()]
 param(
@@ -200,6 +204,134 @@ if (-not $status) {
     else {
         & git -C $RepoRoot add -A
         Ok "已暂存"
+    }
+}
+
+# ---------------------------------------------------------------- 3.2 分类清点
+#
+# 这个仓库里同时放三类东西，各自的性质完全不同，混在一起很容易出事：
+#
+#   源码 —— 要入库，别人 clone 下来编译
+#   软件 —— 编译产物（dist/ 里的 exe + dll）。它**要入库**，因为这是给不想
+#           编译的人的现成版本；但它必须和当前源码版本号一致，
+#           否则会出现"README 说 2.1.0，下载的却是 2.0.0"这种对不上的情况
+#   介绍 —— README / 教程 / CHANGELOG，要入库
+#
+# 所以这一步做两件事：把即将上传的东西按类列清楚，并核对软件版本号。
+Step 3.2 "分类清点"
+
+$catSrc = @(); $catBin = @(); $catDoc = @(); $catOther = @()
+foreach ($line in $status) {
+    $p = ($line -replace '^\s*\S+\s+', '').Trim()
+    if ($p -match '^src/|^tests/|^tools/|^webui/|^third_party/|^build/') { $catSrc += $p }
+    elseif ($p -match '^dist/') { $catBin += $p }
+    elseif ($p -match '\.md$|^LICENSE|^docs/|\.ps1$') { $catDoc += $p }
+    else { $catOther += $p }
+}
+if ($catSrc.Count)   { Info "源码  $($catSrc.Count) 项" }
+if ($catBin.Count)   { Info "软件  $($catBin.Count) 项  ← dist/ 里的编译产物" }
+if ($catDoc.Count)   { Info "介绍  $($catDoc.Count) 项  ← README / 教程 / 日志 / 脚本" }
+if ($catOther.Count) { Info "其他  $($catOther.Count) 项" }
+
+# 核对：src/app.rc 里写的版本号 vs dist 里那个 exe 的版本号
+if (-not $DryRun) {
+    $rcPath = Join-Path $RepoRoot "src\app.rc"
+    $distExe = Join-Path $RepoRoot "dist\LocalCraft.exe"
+    if ((Test-Path $rcPath) -and (Test-Path $distExe)) {
+        $rcText = Get-Content $rcPath -Raw -Encoding UTF8
+        $m = [regex]::Match($rcText, 'FILEVERSION\s+(\d+),(\d+),(\d+),(\d+)')
+        if ($m.Success) {
+            $srcVer = "{0}.{1}.{2}" -f $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[3].Value
+            $binVer = (Get-Item $distExe).VersionInfo.FileVersion
+            if ($binVer -and $binVer.StartsWith($srcVer)) {
+                Ok "版本一致：源码 $srcVer · dist 里的 exe $binVer"
+            } else {
+                Write-Host ""
+                Warn "版本对不上："
+                Warn "    src/app.rc 写的是  $srcVer"
+                Warn "    dist 里的 exe 是   $binVer"
+                Warn "说明 dist 里放的是旧版本，或者改了版本号之后没重新构建。"
+                Write-Host ""
+                Write-Host "  先重新构建并同步到 dist：" -ForegroundColor White
+                Write-Host "      powershell -ExecutionPolicy Bypass -File build\build.ps1 -Clean -Tests" -ForegroundColor Cyan
+                Write-Host "      Copy-Item build\LocalCraft.exe dist\LocalCraft.exe -Force" -ForegroundColor Cyan
+                Write-Host "      Copy-Item build\WebView2Loader.dll dist\WebView2Loader.dll -Force" -ForegroundColor Cyan
+                Write-Host ""
+                if (-not $Force) {
+                    Die "源码与软件版本不一致（确认要以现状上传就加 -Force）"
+                }
+                Warn "-Force 已指定，继续上传。"
+            }
+        }
+    } else {
+        if (-not (Test-Path $distExe)) {
+            Warn "dist\LocalCraft.exe 不存在 —— 这次会上传一个没有现成软件版本的仓库"
+        }
+    }
+}
+
+# ---------------------------------------------------------------- 3.5 日志检查
+#
+# "每次更新都写日志"这件事，光靠自觉是做不到的 —— 忙起来就忘了。
+# 所以在上传前拦一道：如果这次动了代码，但 CHANGELOG.md 没跟着改，就提醒一下。
+#
+# 只提醒、不硬拦：真有不需要记的改动（比如只调了个注释），
+# 加 -NoChangelogCheck 跳过，或者直接回车继续。
+$changelogPath = Join-Path $RepoRoot "CHANGELOG.md"
+
+function Test-UnreleasedEmpty {
+    if (-not (Test-Path $changelogPath)) { return $true }
+    $txt = [System.IO.File]::ReadAllText($changelogPath, [System.Text.Encoding]::UTF8)
+    $inBlock = $false
+    foreach ($ln in ($txt -split "`r?`n")) {
+        if ($ln -match '^##\s+\[' + [regex]::Escape('未发布') + '\]') { $inBlock = $true; continue }
+        if ($inBlock -and ($ln -match '^##\s+\[' -or $ln -match '^---\s*$')) { break }
+        if ($inBlock -and $ln -match '^\s*-\s+\S') { return $false }
+    }
+    return $true
+}
+
+# 改动里有没有"代码"（文档和图片不算，那些不必每条都记日志）
+$changedNames = @()
+if (-not $DryRun) {
+    $changedNames = @(& git -C $RepoRoot status --porcelain 2>$null) |
+                    ForEach-Object { ($_ -split '\s+', 2)[1] }
+}
+$codeTouched = @($changedNames | Where-Object {
+    $_ -match '\.(c|h|rc|manifest|js|css|html|ps1|py|md)$' -and
+    $_ -notmatch '^docs/' -and $_ -notmatch '^(README|CHANGELOG|LICENSE)'
+})
+$logTouched  = @($changedNames | Where-Object { $_ -match '^CHANGELOG\.md$' })
+
+# 首次提交时不做这个检查：那时所有文件都是"新增"，
+# 而 CHANGELOG 里已经用 1.0.0 之类的版本段落把这些内容写清楚了，
+# 再要求往 [未发布] 里写一遍就成了误报。
+$hasAnyCommit = $false
+& git -C $RepoRoot rev-parse --verify --quiet HEAD 2>$null | Out-Null
+if ($LASTEXITCODE -eq 0) { $hasAnyCommit = $true }
+
+if (-not $DryRun -and -not $NoChangelogCheck -and $hasAnyCommit -and $codeTouched.Count -gt 0) {
+    if ($logTouched.Count -eq 0 -or (Test-UnreleasedEmpty)) {
+        Write-Host ""
+        Warn "这次改了代码，但 CHANGELOG.md 没有跟上："
+        $codeTouched | Select-Object -First 6 | ForEach-Object { Warn "  改动了 $_" }
+        if ($codeTouched.Count -gt 6) { Warn "  …等共 $($codeTouched.Count) 个文件" }
+        if ($logTouched.Count -gt 0 -and (Test-UnreleasedEmpty)) {
+            Warn "  （CHANGELOG.md 动过了，但 [未发布] 区块还是空的）"
+        }
+        Write-Host ""
+        Write-Host "  先记一条的话，另开一个窗口执行：" -ForegroundColor White
+        Write-Host "      .\记录更新.ps1 -Added `"这次加了什么`" -Fixed `"修了什么`"" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "  或者现在就补（记完按提示重新跑本脚本）？" -ForegroundColor White
+        $ans = Read-Host "  直接回车 = 不管了继续上传；输入 y = 停下来去补日志"
+        if ($ans -match '^[yY]') {
+            Write-Host ""
+            Info "已停下。补完日志后重新运行本脚本即可。"
+            Write-Host ""
+            exit 0
+        }
+        Warn "按你的选择继续上传（这次没记日志）"
     }
 }
 

@@ -596,11 +596,36 @@ static void build_steps(Plan *p, Action *a, DirSet *planned) {
     }
 
     if (a->produce_only) {
-        /* src 必须带上：生成器（导出/转换）要靠它知道从哪个文件产出 */
-        Step *st = action_push_step(a, STEP_CREATE, a->src, a->dst,
-                                    a->producer ? a->producer : L"外部引擎产出");
-        /* 产物由谁生成：executor 会在执行这一步时按规格现生成文件 */
-        if (st && a->generator) st->generator = _wcsdup(a->generator);
+        if (a->inplace_edit) {
+            /*
+             * 原地改文件内容（文本批量查找替换）。
+             *
+             * 拆成两条步骤，是为了让**回退引擎一行都不用改**就能还原内容：
+             *
+             *   正向：  ① MOVE(原文件 → 回收站)   先把原件留个底
+             *           ② CREATE(原路径)          生成器读①里的副本，写出新内容
+             *
+             *   回退：  ②' CREATE 的逆 = 把改过的文件移进回收站
+             *           ①' MOVE 的逆   = 把回收站里的原件搬回原位
+             *
+             * 结果是文件内容被完整还原。如果只写一条 CREATE，
+             * 回退就只会删掉新文件，用户的原内容就永远没了。
+             *
+             * CREATE 的 src 指向回收站副本：生成器要靠它读到原始内容。
+             */
+            wchar_t *tpath = plan_build_trash_path(p, a, lc_basename(a->src));
+            action_push_step(a, STEP_MOVE, a->src, tpath, L"原文件移入回收站");
+            Step *st = action_push_step(a, STEP_CREATE, tpath, a->dst,
+                                        a->producer ? a->producer : L"写入替换后的内容");
+            if (st && a->generator) st->generator = _wcsdup(a->generator);
+            free(tpath);
+        } else {
+            /* src 必须带上：生成器（导出/转换）要靠它知道从哪个文件产出 */
+            Step *st = action_push_step(a, STEP_CREATE, a->src, a->dst,
+                                        a->producer ? a->producer : L"外部引擎产出");
+            /* 产物由谁生成：executor 会在执行这一步时按规格现生成文件 */
+            if (st && a->generator) st->generator = _wcsdup(a->generator);
+        }
     } else if (a->is_copy) {
         action_push_step(a, STEP_COPY, a->src, a->dst, L"复制");
     } else {
@@ -678,7 +703,25 @@ void plan_finalize(Plan *p, int check_source, int recheck_disk) {
     memset(&planned, 0, sizeof(planned));
     for (size_t i = 0; i < p->n_actions; ++i) {
         Action *a = &p->actions[i];
-        if (action_blocked(a) || !action_changed(a)) continue;
+        if (action_blocked(a)) continue;
+
+        /*
+         * 这里必须把 force_exec 一起放行。
+         *
+         * 本来的判断是 `!action_changed(a)` 就跳过 —— 意思是"新旧路径相同、
+         * 没什么可做的，不用拆步骤"。但"原地改文件内容"（文本批量查找替换）
+         * 恰恰是 src == dst 的：它要让 force_exec 强制执行。
+         *
+         * 结果就是：预览阶段 action_executable() 因为 force_exec 返回 true，
+         * 界面上显示"可执行 3"；可到了执行阶段，因为这里没给它拆步骤，
+         * a->n_steps 是 0，run_action 一看没有步骤就返回"跳过"。
+         * 最终表现为"可执行 3 个，执行结果 成功 0 失败 0 跳过 3"，
+         * 而且不报任何错。
+         *
+         * 判断"要不要拆步骤"和"能不能执行"必须用同一套条件，
+         * 否则就会出现这种两边对不上的情况。
+         */
+        if (!action_changed(a) && !a->force_exec) continue;
         build_steps(p, a, &planned);
     }
     dirset_free(&planned);

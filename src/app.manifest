@@ -8,7 +8,7 @@
     同时在这里声明 DPI 感知（比代码里调 SetProcessDPIAware 更早生效），
     否则在 200% 缩放的屏幕上窗口会被系统按缩放倍数再放一次，跑到屏幕外面去。
   -->
-  <assemblyIdentity type="win32" name="LocalCraft" version="1.0.0.0"
+  <assemblyIdentity type="win32" name="LocalCraft" version="2.1.0.0"
                     processorArchitecture="amd64"/>
 
   <dependency>

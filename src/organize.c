@@ -64,6 +64,20 @@ static const ExtCat EXT_MAP[] = {
 };
 
 const wchar_t *organize_category_of(const wchar_t *path) {
+    /*
+     * 先问用户自定义分类。
+     *
+     * 自定义优先于内置是刻意的：用户既然专门写了 [发票] 这个段落，
+     * 就说明他要的分类粒度比内置的"文档 / 图片 / 音视频"细得多。
+     * 如果让内置先命中，他会发现自己写的规则永远不生效，而且不知道为什么。
+     *
+     * 匹配规则是"段落里任意一条条件满足即命中"，多个分类按 order 从小到大试，
+     * 第一个命中的生效 —— 一个文件只归一类。允许同时命中多类的话，
+     * 按 {category} 建目录时同一个文件会对应多个目标路径，预览表就没法看了。
+     */
+    const wchar_t *custom = categories_match(path);
+    if (custom && custom[0]) return custom;
+
     const wchar_t *ext = lc_extname(path);
     if (!ext || !*ext) return L"其他";
     for (int i = 0; EXT_MAP[i].ext; ++i)
@@ -264,8 +278,15 @@ int organize_target_rel(const wchar_t *path, const OrganizeRule *r,
 
 /* ================================================== 生成计划 ========== */
 
-Plan *organize_build_plan(Arena *a, const wchar_t *root, const OrganizeRule *r,
-                          Policy policy, const wchar_t *trash_root) {
+/*
+ * preset 非空时只处理这些文件，不去扫描目录。
+ *
+ * 这是给"文件夹监控"用的：监控队列里已经攒了"刚刚变化的这几个文件"，
+ * 再拿整个目录扫一遍就没意义了 —— 用户想要的是把手头这几个处理掉。
+ */
+Plan *organize_build_plan_ex(Arena *a, const wchar_t *root, const OrganizeRule *r,
+                             Policy policy, const wchar_t *trash_root,
+                             FileList *preset) {
     (void)trash_root;
     Plan *plan = (Plan *)arena_zalloc(a, sizeof(Plan));
 
@@ -279,7 +300,10 @@ Plan *organize_build_plan(Arena *a, const wchar_t *root, const OrganizeRule *r,
 
     FileList files;
     filelist_init(&files, a);
-    if (organize_scan(root, r, &files) != 0) {
+    if (preset) {
+        for (size_t i = 0; i < preset->n; ++i)
+            filelist_push(&files, preset->paths[i]);
+    } else if (organize_scan(root, r, &files) != 0) {
         plan_compute_stats(plan);
         return plan;
     }
@@ -342,6 +366,11 @@ Plan *organize_build_plan(Arena *a, const wchar_t *root, const OrganizeRule *r,
 
 /* ================================================== 统计 ============== */
 
+/* 原版入口：内部扫描整个目录 */
+Plan *organize_build_plan(Arena *a, const wchar_t *root, const OrganizeRule *r,
+                          Policy policy, const wchar_t *trash_root) {
+    return organize_build_plan_ex(a, root, r, policy, trash_root, NULL);
+}
 int organize_category_stats(const wchar_t *root, int recursive, Arena *a,
                             CategoryStat **out, size_t *n_out,
                             int *total_count, long long *total_size) {

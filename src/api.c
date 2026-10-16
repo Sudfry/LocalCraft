@@ -90,6 +90,11 @@ struct ApiState {
     volatile LONG    api_calls;    /* 累计接口调用次数，用于诊断 */
     int64_t          started;
     wchar_t          web_dir[MAX_PATH * 2];
+
+    /* 文件夹监控。全局只保留一个 —— 同时盯多个目录意义不大，
+       而且会让"这次变化该按哪套规则处理"变得含混。
+       停止监控时整个释放。 */
+    Watcher         *watcher;
 };
 
 /* ==================================================== 小工具 ========== */
@@ -739,6 +744,73 @@ static int m_organize_preview(ApiState *st, Arena *a, const JsonValue *p, Str *o
     return 0;
 }
 
+/* ---------------- categories.* ----------------
+ *
+ * 用户自定义分类。配置文件是数据目录下的「分类规则.ini」，
+ * 首次运行会自动生成一份带注释的模板，用户照着改就行。
+ */
+
+/* 把当前载入的自定义分类序列化成 JSON */
+static void categories_to_json(Str *out, const wchar_t *warn, int created) {
+    str_puts(out, "{\"config_path\":");
+    json_escape_to(out, categories_config_path());
+    str_printf(out, ",\"created\":%s,\"warn\":", created ? "true" : "false");
+    json_escape_to(out, warn ? warn : L"");
+
+    size_t n = categories_count();
+    str_printf(out, ",\"count\":%llu,\"items\":[", (unsigned long long)n);
+    for (size_t i = 0; i < n; ++i) {
+        wchar_t name[256], exts[512], kws[512], re[512];
+        int order = 100;
+        if (categories_detail(i, name, 256, exts, 512, kws, 512, re, 512, &order) != 0)
+            continue;
+        if (i) str_putc(out, ',');
+        str_puts(out, "{\"name\":");
+        json_escape_to(out, name);
+        str_puts(out, ",\"exts\":");
+        json_escape_to(out, exts);
+        str_puts(out, ",\"keywords\":");
+        json_escape_to(out, kws);
+        str_puts(out, ",\"regex\":");
+        json_escape_to(out, re);
+        str_printf(out, ",\"order\":%d}", order);
+    }
+    str_puts(out, "]}");
+}
+
+static int m_categories_list(ApiState *st, Arena *a, const JsonValue *p,
+                             Str *out, Str *err) {
+    (void)st; (void)a; (void)p; (void)err;
+    categories_get();          /* 首次调用会自动载入；文件不存在则生成模板 */
+    categories_to_json(out, L"", 0);
+    return 0;
+}
+
+static int m_categories_reload(ApiState *st, Arena *a, const JsonValue *p,
+                               Str *out, Str *err) {
+    (void)st; (void)a; (void)p;
+    wchar_t e[512], w[512];
+    e[0] = 0; w[0] = 0;
+    int created = 0;
+    if (categories_reload(e, 512, w, 512, &created) != 0)
+        return fail_w(err, L"%ls", e[0] ? e : L"载入失败");
+    categories_to_json(out, w, created);
+    return 0;
+}
+
+static int m_categories_open(ApiState *st, Arena *a, const JsonValue *p,
+                             Str *out, Str *err) {
+    (void)st; (void)a; (void)p;
+    categories_get();          /* 确保文件存在 */
+    const wchar_t *path = categories_config_path();
+    if (!lc_is_file(path)) FAIL("配置文件不存在，而且没能创建出来。");
+    if (lc_shell_open(path) != 0) FAIL("无法打开配置文件（可以按 config_path 手动打开）。");
+    str_puts(out, "{\"path\":");
+    json_escape_to(out, path);
+    str_puts(out, "}");
+    return 0;
+}
+
 /* ---------------- organize.scan ---------------- */
 static int m_organize_scan(ApiState *st, Arena *a, const JsonValue *p, Str *out, Str *err) {
     (void)st;
@@ -1010,6 +1082,27 @@ static int m_exec_run(ApiState *st, Arena *a, const JsonValue *p, Str *out, Str 
     }
     if (s->plan->st_executable == 0)
         FAIL("没有可执行的项：所有行要么未勾选，要么存在冲突。");
+
+    /*
+     * 如果正在监控，先把这一批动作涉及的路径登记为"我们自己动的"。
+     *
+     * 否则：整理完一批文件，那些 MOVE 动作本身也是"文件变化"，
+     * 会立刻被记回队列 —— 用户刚点完「整理」，队列里马上又冒出几条，
+     * 看着像功能坏了。登记之后，这些路径在接下来一分钟内不会被记录。
+     *
+     * 按**具体路径**登记，而不是整个静默一段时间：
+     * 静默期间用户真的改了别的文件就会漏掉，按路径登记没有这个盲区。
+     */
+    EnterCriticalSection(&st->lock);
+    Watcher *w = st->watcher;
+    LeaveCriticalSection(&st->lock);
+    if (w) {
+        for (size_t i = 0; i < s->plan->n_actions; ++i) {
+            Action *act = &s->plan->actions[i];
+            if (act->src) watch_suppress(w, act->src, 90);
+            if (act->dst) watch_suppress(w, act->dst, 90);
+        }
+    }
 
     char id[32];
     if (job_start(st, s, s->plan, 0, id, sizeof(id)) != 0) FAIL("无法开始执行");
@@ -1818,15 +1911,29 @@ static int m_summarize_batch(ApiState *st, Arena *a, const JsonValue *p,
  * 我第一版就是这么写的，结果"txt 转 png 不支持"这个标记根本没出现在界面上。
  * 想在标准分析之外补一条自己的判断，只能等 finalize 跑完再说。
  */
+/*
+ * 建一个"产物型"计划的公共骨架。
+ *
+ * policy 是计划级别的默认同名策略：
+ *   · 重命名 / 整理 / 转换 / 替换 / 导出 —— 用 POLICY_RENAME。
+ *     这些场景下"别碰已有的文件"是安全的默认值。
+ *   · 备份 / 同步 —— 用 POLICY_OVERWRITE。
+ *     同步的语义就是"让目标跟上源"。按改名处理的话，每同步一次就会多出
+ *     一个「笔记 (1).txt」「笔记 (2).txt」，目标目录最后被副本堆满 ——
+ *     那不是同步，那是垃圾堆。覆盖依然是可回退的（旧文件先进回收站）。
+ *
+ * 用户在执行前仍可在预览页改策略，这里给的只是更合适的默认值。
+ */
 static int make_artifact_plan(ApiState *st, const wchar_t *root,
-                              const wchar_t *title, int kind,
+                              const wchar_t *title, const wchar_t *category,
+                              Policy policy,
                               void (*add_actions)(Plan *, void *),
                               void (*after_finalize)(Plan *, void *),
                               void *ud, Str *out, Str *err) {
     Arena *pa = arena_new();
     Plan *plan = (Plan *)arena_zalloc(pa, sizeof(Plan));
     if (!plan) { arena_free(pa); FAIL("内存不足"); }
-    plan_init(plan, pa, root, POLICY_RENAME, L"convert", title);
+    plan_init(plan, pa, root, policy, category, title);
 
     add_actions(plan, ud);
     plan_finalize(plan, 1, 1);
@@ -1907,8 +2014,8 @@ static int m_export_run(ApiState *st, Arena *a, const JsonValue *p,
     wstr_printf(&title, L"导出预览 — %ls → %ls", lc_basename(src),
                 lc_basename(dst.data));
 
-    int rc = make_artifact_plan(st, outdir, title.data, 5, add_export_action, NULL, &sp,
-                                out, err);
+    int rc = make_artifact_plan(st, outdir, title.data, L"export", POLICY_RENAME, add_export_action,
+                                NULL, &sp, out, err);
 
     wstr_free(&title);
     wstr_free(&gen);
@@ -2059,7 +2166,7 @@ static int m_convert_preview(ApiState *st, Arena *a, const JsonValue *p,
     wstr_printf(&title, L"格式转换预览 — 转为 %ls（%llu 个文件）",
                 tgt.data, (unsigned long long)sp->sources.len);
 
-    int rc = make_artifact_plan(st, dir, title.data, 4, add_convert_action, apply_convert_feasibility, sp,
+    int rc = make_artifact_plan(st, dir, title.data, L"convert", POLICY_RENAME, add_convert_action, apply_convert_feasibility, sp,
                                 out, err);
 
     wstr_free(&title);
@@ -2068,6 +2175,718 @@ static int m_convert_preview(ApiState *st, Arena *a, const JsonValue *p,
     vec_free(&sp->feas);
     free(sp);
     wstr_free(&tgt);
+    return rc;
+}
+
+/* ========================================== 文本内容批量查找替换 ======== */
+
+/* 从请求里读选项。find 必须非空，其余走默认值。 */
+static void findrep_opts_from(Arena *a, const JsonValue *p, FindRepOpts *o) {
+    memset(o, 0, sizeof(*o));
+    o->find            = jw(a, p, "find");
+    o->replace         = jw(a, p, "replace");
+    o->use_regex       = jbool(p, "regex", 0);
+    o->ignore_case     = jbool(p, "ignore_case", 0);
+    o->recursive       = jbool(p, "recursive", 1);
+    o->include         = jw(a, p, "include");
+    o->exclude         = jw(a, p, "exclude");
+    o->any_ext         = jbool(p, "any_ext", 0);
+    o->max_bytes       = (long long)jint(p, "max_mb", 64) * 1024ll * 1024ll;
+    o->limit           = jint(p, "limit", 5000);
+    o->sample_per_file = jint(p, "samples", 2);
+    if (o->max_bytes <= 0) o->max_bytes = 64ll << 20;
+    if (o->limit <= 0 || o->limit > 50000) o->limit = 5000;
+}
+
+/* 把扫描结果序列化成 JSON */
+static void findrep_to_json(const FindRepResult *r, Str *out) {
+    str_printf(out, "{\"stats\":{\"files\":%llu,\"matches\":%lld,\"scanned\":%lld,"
+                    "\"skipped_binary\":%lld,\"skipped_big\":%lld,"
+                    "\"skipped_ext\":%lld,\"unreadable\":%lld},\"files\":[",
+                (unsigned long long)r->n_files, r->total_matches, r->scanned,
+                r->skipped_binary, r->skipped_big, r->skipped_ext, r->unreadable);
+
+    for (size_t i = 0; i < r->n_files; ++i) {
+        if (i) str_putc(out, ',');
+        str_puts(out, "{\"path\":");
+        json_escape_to(out, r->files[i].path);
+        str_printf(out, ",\"matches\":%d,\"bytes\":%lld,\"encoding\":%d}",
+                   r->files[i].matches, r->files[i].bytes, r->files[i].encoding);
+    }
+    str_puts(out, "],\"hits\":[");
+    for (size_t i = 0; i < r->n_hits; ++i) {
+        if (i) str_putc(out, ',');
+        str_puts(out, "{\"file\":");
+        json_escape_to(out, r->hits[i].file);
+        str_printf(out, ",\"line\":%d,\"before\":", r->hits[i].line);
+        json_escape_to(out, r->hits[i].before ? r->hits[i].before : L"");
+        str_puts(out, ",\"after\":");
+        json_escape_to(out, r->hits[i].after ? r->hits[i].after : L"");
+        str_putc(out, '}');
+    }
+    str_puts(out, "]}");
+}
+
+static int m_findrep_scan(ApiState *st, Arena *a, const JsonValue *p,
+                          Str *out, Str *err) {
+    (void)st;
+    wchar_t *dir = jw(a, p, "dir");
+    if (!dir[0]) FAIL("请先选择文件夹。");
+    if (!lc_is_dir(dir)) return fail_w(err, L"文件夹不存在：%ls", dir);
+
+    FindRepOpts o;
+    findrep_opts_from(a, p, &o);
+    if (!o.find[0]) FAIL("请填写要查找的内容。");
+
+    FindRepResult res;
+    wchar_t e2[512];
+    e2[0] = 0;
+    if (findrep_scan(dir, &o, &res, e2, 512) != 0)
+        return fail_w(err, L"%ls", e2[0] ? e2 : L"扫描失败");
+
+    findrep_to_json(&res, out);
+    findrep_free(&res);
+    return 0;
+}
+
+/* ---- 预览：把匹配到的文件变成一个"原地改内容"的计划 ---- */
+
+typedef struct {
+    Vec      files;      /* wchar_t* */
+    Vec      counts;     /* int* */
+    wchar_t *spec;
+} FindRepSpec;
+
+static void add_findrep_action(Plan *plan, void *ud) {
+    FindRepSpec *sp = (FindRepSpec *)ud;
+    for (size_t i = 0; i < sp->files.len; ++i) {
+        const wchar_t *path = (const wchar_t *)sp->files.items[i];
+        Action *a = plan_add(plan, L"findrep", path, path, L"内容替换");
+        if (!a) continue;
+
+        a->produce_only = 1;
+        /* 原地改内容：planner 会拆成 MOVE(→回收站) + CREATE(原路径)，
+           这样逆序回退能把原内容完整还原 */
+        a->inplace_edit = 1;
+        /* src 与 dst 是同一路径，action_changed() 会认为"没变化"。
+           不加这一行，整个计划根本不会被执行。 */
+        a->force_exec   = 1;
+
+        a->generator = arena_wcsdup(plan->arena, sp->spec);
+        a->producer  = arena_wcsdup(plan->arena, L"写入替换后的内容");
+        if (sp->counts.items && i < sp->counts.len) {
+            int n = *(int *)sp->counts.items[i];
+            wchar_t nb[64];
+            swprintf(nb, 64, L"替换 %d 处", n);
+            a->note = arena_wcsdup(plan->arena, nb);
+        }
+    }
+}
+
+static int m_findrep_preview(ApiState *st, Arena *a, const JsonValue *p,
+                             Str *out, Str *err) {
+    wchar_t *dir = jw(a, p, "dir");
+    if (!dir[0]) FAIL("请先选择文件夹。");
+    if (!lc_is_dir(dir)) return fail_w(err, L"文件夹不存在：%ls", dir);
+
+    FindRepOpts o;
+    findrep_opts_from(a, p, &o);
+    if (!o.find[0]) FAIL("请填写要查找的内容。");
+
+    FindRepResult res;
+    wchar_t e2[512];
+    e2[0] = 0;
+    if (findrep_scan(dir, &o, &res, e2, 512) != 0) {
+        findrep_free(&res);
+        return fail_w(err, L"%ls", e2[0] ? e2 : L"扫描失败");
+    }
+    if (res.n_files == 0) {
+        findrep_free(&res);
+        FAIL("没有找到任何匹配，无需执行。");
+    }
+
+    /* 生成器规格：所有文件共用同一套查找替换规则 */
+    wchar_t spec[8192];
+    if (findrep_make_spec(&o, spec, 8192) != 0) {
+        findrep_free(&res);
+        FAIL("查找或替换的内容太长，请缩短后重试。");
+    }
+
+    FindRepSpec sp;
+    vec_init(&sp.files);
+    vec_init(&sp.counts);
+    sp.spec = arena_wcsdup(a, spec);
+
+    for (size_t i = 0; i < res.n_files; ++i) {
+        vec_push(&sp.files, arena_wcsdup(a, res.files[i].path));
+        int *n = (int *)calloc(1, sizeof(int));
+        if (n) { *n = res.files[i].matches; vec_push(&sp.counts, n); }
+    }
+
+    WStr title;
+    wstr_init(&title);
+    wstr_printf(&title, L"文本替换预览 — %llu 个文件、共 %lld 处匹配",
+                (unsigned long long)res.n_files, res.total_matches);
+    findrep_free(&res);
+
+    int rc = make_artifact_plan(st, dir, title.data, L"findrep", POLICY_RENAME,
+                                add_findrep_action, NULL, &sp, out, err);
+
+    wstr_free(&title);
+    vec_free(&sp.files);
+    for (size_t i = 0; i < sp.counts.len; ++i) free(sp.counts.items[i]);
+    vec_free(&sp.counts);
+    return rc;
+}
+
+/* ---------------- backup.* ----------------
+ *
+ * 备份 / 同步。做法是：先只读分析源和目标，算出哪些文件要复制，
+ * 再把这些条目变成普通的 COPY 动作送进计划 —— 于是预览、冲突检测、
+ * 一键回退全都自动有了，不用另写一套复制逻辑。
+ */
+
+static void backup_opts_from(Arena *a, const JsonValue *p,
+                             const wchar_t **src, const wchar_t **dst,
+                             const wchar_t **incl, const wchar_t **excl,
+                             int *recursive, int *skip_hidden,
+                             int *strict, long long *max_bytes) {
+    *src = jw(a, p, "src");
+    *dst = jw(a, p, "dst");
+    *incl = jw(a, p, "include");
+    *excl = jw(a, p, "exclude");
+    *recursive   = jbool(p, "recursive", 1);
+    *skip_hidden = jbool(p, "skip_hidden", 1);
+    *strict      = jbool(p, "strict", 0);
+    long long mb = (long long)jint(p, "max_mb", 8192);
+    *max_bytes = mb > 0 ? mb * 1024ll * 1024ll : (8ll << 30);
+}
+
+static void backup_to_json(const BackupScan *sc, Str *out) {
+    str_printf(out,
+        "{\"stats\":{\"scanned\":%lld,\"new\":%lld,\"diff\":%lld,\"same\":%lld,"
+        "\"bytes\":%lld,\"skipped_ext\":%lld,\"skipped_size\":%lld},\"items\":[",
+        sc->scanned, sc->n_new, sc->n_diff, sc->n_same, sc->total_bytes,
+        sc->skipped_ext, sc->skipped_size);
+
+    /* 只列需要复制的那些 —— 内容相同的文件可能成千上万，全列出来没意义 */
+    size_t shown = 0;
+    for (size_t i = 0; i < sc->n && shown < 3000; ++i) {
+        if (sc->items[i].state == 2) continue;   /* 2 = 已相同 */
+        if (shown) str_putc(out, ',');
+        str_puts(out, "{\"rel\":");
+        json_escape_to(out, sc->items[i].rel);
+        str_puts(out, ",\"dst\":");
+        json_escape_to(out, sc->items[i].dst);
+        str_printf(out, ",\"size\":%lld,\"state\":%d}",
+                   sc->items[i].size, sc->items[i].state);
+        shown++;
+    }
+    str_puts(out, "]}");
+}
+
+static int m_backup_scan(ApiState *st, Arena *a, const JsonValue *p,
+                         Str *out, Str *err) {
+    (void)st;
+    const wchar_t *src, *dst, *incl, *excl;
+    int recursive, skip_hidden, strict;
+    long long maxb;
+    backup_opts_from(a, p, &src, &dst, &incl, &excl,
+                     &recursive, &skip_hidden, &strict, &maxb);
+
+    BackupScan sc;
+    wchar_t e2[512];
+    e2[0] = 0;
+    if (backup_scan(src, dst, incl, excl, recursive, skip_hidden, strict, maxb,
+                    &sc, e2, 512) != 0)
+        return fail_w(err, L"%ls", e2[0] ? e2 : L"分析失败");
+
+    backup_to_json(&sc, out);
+    backup_scan_free(&sc);
+    return 0;
+}
+
+typedef struct {
+    Vec srcs;   /* wchar_t* */
+    Vec dsts;   /* wchar_t* */
+} BackupSpec;
+
+static void add_backup_action(Plan *plan, void *ud) {
+    BackupSpec *sp = (BackupSpec *)ud;
+    for (size_t i = 0; i < sp->srcs.len; ++i) {
+        const wchar_t *s = (const wchar_t *)sp->srcs.items[i];
+        const wchar_t *d = (const wchar_t *)sp->dsts.items[i];
+        Action *a = plan_add(plan, L"backup", s, d, L"复制到目标");
+        if (!a) continue;
+        /* 复制而不是移动 —— 源文件必须留着，这是备份的基本要求 */
+        a->is_copy = 1;
+    }
+}
+
+static int m_backup_preview(ApiState *st, Arena *a, const JsonValue *p,
+                            Str *out, Str *err) {
+    const wchar_t *src, *dst, *incl, *excl;
+    int recursive, skip_hidden, strict;
+    long long maxb;
+    backup_opts_from(a, p, &src, &dst, &incl, &excl,
+                     &recursive, &skip_hidden, &strict, &maxb);
+
+    BackupScan sc;
+    wchar_t e2[512];
+    e2[0] = 0;
+    if (backup_scan(src, dst, incl, excl, recursive, skip_hidden, strict, maxb,
+                    &sc, e2, 512) != 0) {
+        backup_scan_free(&sc);
+        return fail_w(err, L"%ls", e2[0] ? e2 : L"分析失败");
+    }
+
+    if (sc.n_new + sc.n_diff == 0) {
+        long long same = sc.n_same;
+        backup_scan_free(&sc);
+        return fail_w(err,
+            L"目标已经是最新的，没有需要复制的文件（%lld 个文件内容相同）。", same);
+    }
+
+    BackupSpec sp;
+    vec_init(&sp.srcs);
+    vec_init(&sp.dsts);
+    for (size_t i = 0; i < sc.n; ++i) {
+        if (sc.items[i].state == 2) continue;     /* 跳过已相同的 */
+        vec_push(&sp.srcs, arena_wcsdup(a, sc.items[i].src));
+        vec_push(&sp.dsts, arena_wcsdup(a, sc.items[i].dst));
+    }
+
+    WStr title;
+    wstr_init(&title);
+    wstr_printf(&title, L"同步预览 — 新增 %lld 个、更新 %lld 个、跳过 %lld 个已相同",
+                sc.n_new, sc.n_diff, sc.n_same);
+    backup_scan_free(&sc);
+
+    int rc = make_artifact_plan(st, src, title.data, L"backup", POLICY_OVERWRITE,
+                                add_backup_action, NULL, &sp, out, err);
+
+    wstr_free(&title);
+    vec_free(&sp.srcs);
+    vec_free(&sp.dsts);
+    return rc;
+}
+
+static int m_backup_verify(ApiState *st, Arena *a, const JsonValue *p,
+                           Str *out, Str *err) {
+    (void)st;
+    wchar_t *s = jw(a, p, "src");
+    wchar_t *d = jw(a, p, "dst");
+    if (!s[0] || !d[0]) FAIL("需要同时给出源文件和目标文件。");
+    if (!lc_is_file(s)) FAIL("源文件不存在。");
+    if (!lc_is_file(d)) FAIL("目标文件不存在。");
+
+    /* 注意：不一致不是"错误"，是一个正常结果，所以照常返回 ok:true */
+    int rc = backup_verify(s, d);
+    if (rc < 0) FAIL("读文件时出错，无法比对。");
+    str_printf(out, "{\"same\":%s}", rc == 0 ? "true" : "false");
+    return 0;
+}
+
+/* ---------------- watch.* ----------------
+ *
+ * 文件夹监控。
+ *
+ * 说清楚一件事：**这个功能永远不会自己动你的文件。**
+ * 它只把"刚刚变化的文件"记到一个队列里，要不要整理、怎么整理，
+ * 由用户在界面上点一下再说 —— 仍然走"先预览、再执行、可回退"那一套。
+ *
+ * 常见的"监控到就自动处理"和本项目的核心承诺直接冲突：
+ * 自动处理意味着用户还没看过预览，文件就已经被动了。
+ * 省下的那点事，补不回"发现文件已经被挪走、还不知道挪去哪了"的代价。
+ */
+
+static int m_watch_start(ApiState *st, Arena *a, const JsonValue *p,
+                         Str *out, Str *err) {
+    wchar_t *dir = jw(a, p, "dir");
+    int recursive = jbool(p, "recursive", 1);
+
+    EnterCriticalSection(&st->lock);
+    Watcher *old = st->watcher;
+    st->watcher = NULL;
+    LeaveCriticalSection(&st->lock);
+    if (old) watch_stop(old);          /* 换目录：先把旧的停掉 */
+
+    wchar_t e2[512];
+    e2[0] = 0;
+    Watcher *w = watch_start(dir, recursive, e2, 512);
+    if (!w) return fail_w(err, L"%ls", e2[0] ? e2 : L"无法开始监控");
+
+    EnterCriticalSection(&st->lock);
+    st->watcher = w;
+    LeaveCriticalSection(&st->lock);
+
+    str_puts(out, "{\"ok\":true}");
+    return 0;
+}
+
+static int m_watch_stop(ApiState *st, Arena *a, const JsonValue *p,
+                        Str *out, Str *err) {
+    (void)a; (void)p; (void)err;
+    EnterCriticalSection(&st->lock);
+    Watcher *w = st->watcher;
+    st->watcher = NULL;
+    LeaveCriticalSection(&st->lock);
+    if (w) watch_stop(w);
+    str_puts(out, "{\"ok\":true}");
+    return 0;
+}
+
+static int m_watch_poll(ApiState *st, Arena *a, const JsonValue *p,
+                        Str *out, Str *err) {
+    (void)a; (void)p; (void)err;
+
+    EnterCriticalSection(&st->lock);
+    Watcher *w = st->watcher;
+    LeaveCriticalSection(&st->lock);
+
+    if (!w) {
+        str_puts(out, "{\"running\":false,\"count\":0,\"items\":[]}");
+        return 0;
+    }
+
+    size_t n = watch_count(w);
+    str_puts(out, "{\"running\":true,\"root\":");
+    json_escape_to(out, watch_root(w) ? watch_root(w) : L"");
+    str_printf(out, ",\"count\":%llu,\"dropped\":%lld,\"items\":[",
+               (unsigned long long)n, watch_dropped(w));
+
+    /* 只回最近 200 条 —— 界面是滚动列表，列几千条也没人看 */
+    size_t skip = n > 200 ? n - 200 : 0;
+    int first = 1;
+    for (size_t i = skip; i < n; ++i) {
+        const wchar_t *rel = NULL;
+        int kind = 0;
+        long long when = 0, cnt = 0;
+        if (watch_item_at(w, i, &rel, &kind, &when, &cnt) != 0) continue;
+        if (!first) str_putc(out, ',');
+        first = 0;
+        str_puts(out, "{\"rel\":");
+        json_escape_to(out, rel ? rel : L"");
+        str_printf(out, ",\"kind\":%d,\"when\":%lld,\"count\":%lld}",
+                   kind, when, cnt);
+    }
+    str_puts(out, "]}");
+    return 0;
+}
+
+static int m_watch_clear(ApiState *st, Arena *a, const JsonValue *p,
+                         Str *out, Str *err) {
+    (void)a; (void)p; (void)err;
+    EnterCriticalSection(&st->lock);
+    Watcher *w = st->watcher;
+    LeaveCriticalSection(&st->lock);
+    if (w) watch_clear(w);
+    str_puts(out, "{\"ok\":true}");
+    return 0;
+}
+
+/* 把监控队列里攒下的文件，按整理规则生成一张预览 —— 仍然要用户确认才执行 */
+static int m_watch_preview(ApiState *st, Arena *a, const JsonValue *p,
+                           Str *out, Str *err) {
+    EnterCriticalSection(&st->lock);
+    Watcher *w = st->watcher;
+    LeaveCriticalSection(&st->lock);
+    if (!w) FAIL("还没有开始监控。");
+
+    wchar_t **paths = NULL;
+    size_t n = 0;
+    long long dropped = 0;
+    if (watch_take_all(w, &paths, &n, &dropped) != 0) FAIL("读取监控队列失败。");
+    if (n == 0) {
+        for (size_t i = 0; i < n; ++i) free(paths[i]);
+        free(paths);
+        FAIL("队列里没有可处理的文件（新增和修改的才会入队）。");
+    }
+
+    /* 只保留现在还在的文件 —— 队列里的东西可能已经被用户删掉了 */
+    FileList fl;
+    filelist_init(&fl, a);
+    long long missing = 0;
+    for (size_t i = 0; i < n; ++i) {
+        wchar_t full[MAX_PATH * 2];
+        swprintf(full, MAX_PATH * 2, L"%ls\\%ls", watch_root(w), paths[i]);
+        if (lc_is_file(full)) filelist_push(&fl, full);
+        else missing++;
+        free(paths[i]);
+    }
+    free(paths);
+
+    if (fl.n == 0) FAIL("队列里的文件都已经不在了，没有可处理的。");
+
+    OrganizeRule r;
+    organize_rule_init(&r, a);
+    /* 界面上可以让用户改模板；这里给默认值 */
+    wchar_t *tpl = jw(a, p, "template");
+    if (tpl[0]) r.template_ = arena_wcsdup(a, tpl);
+    wchar_t *mode = jw(a, p, "mode");
+    r.mode = arena_wcsdup(a, (mode[0] && lc_wcs_ieq(mode, L"copy")) ? L"copy" : L"move");
+    r.recursive = 0;          /* 清单是明确的，不需要再递归 */
+
+    WStr title;
+    wstr_init(&title);
+    wstr_printf(&title, L"监控队列预览 — %llu 个文件待整理", (unsigned long long)fl.n);
+
+    /*
+     * plan 必须放在**自己的 arena** 里，不能用请求级的这个 a。
+     *
+     * 请求级的 arena 在本次接口调用结束时就被回收了，而 plan 要活到用户
+     * 点「执行」那一刻 —— 中间隔着好几次别的请求。用 a 的话，等到执行时
+     * plan 里的每个指针都是野的，程序当场崩。
+     *
+     * make_artifact_plan 里也是这么做的（arena_new），这里一开始漏了。
+     */
+    Arena *pa = arena_new();
+    Plan *plan = organize_build_plan_ex(pa, watch_root(w), &r, POLICY_RENAME,
+                                        NULL, &fl);
+    if (!plan) { arena_free(pa); wstr_free(&title); FAIL("生成计划失败。"); }
+
+    EnterCriticalSection(&st->lock);
+    sessions_expire(st);
+    PlanSession *s = session_new(st, plan, title.data);
+    LeaveCriticalSection(&st->lock);
+    wstr_free(&title);
+    if (!s) { arena_free(pa); FAIL("无法保存计划。"); }
+
+    plan_to_json(plan, s->title, out);
+    (void)missing;   /* 已经不在的文件会被自动排除掉，不必单独提示 */
+    return 0;
+}
+
+/* ---------------- table.* ----------------
+ *
+ * 表格处理：读取 xlsx / csv，做筛选、排序、选列、合并，输出 CSV。
+ *
+ * 和备份那个模块一样，这里只做"分析 + 建计划"，真正的产出交给生成器，
+ * 于是预览、冲突检测、一键回退全是现成的。
+ */
+
+/* 把参数块拼成生成器规格 */
+static int table_build_spec(Arena *a, const JsonValue *p, const wchar_t *op,
+                            const wchar_t *dir, Vec *files,
+                            const wchar_t *outpath, wchar_t *spec, size_t cch) {
+    WStr s; wstr_init(&s);
+    wstr_printf(&s, L"op=%ls\n", op);
+    if (dir && dir[0]) wstr_printf(&s, L"dir=%ls\n", dir);
+    for (size_t i = 0; i < files->len; ++i)
+        wstr_printf(&s, L"file=%ls\n", (const wchar_t *)files->items[i]);
+
+    int header = jbool(p, "header", 1);
+    wstr_printf(&s, L"header=%d\n", header);
+
+    const char *encs = json_string(json_get(p, "encoding"), NULL);
+    wstr_printf(&s, L"enc=%hs\n", (encs && strcmp(encs, "gbk") == 0) ? "gbk" : "utf8bom");
+    (void)outpath;
+
+    int sortcol = jint(p, "sort_col", -1);
+    if (sortcol >= 0) {
+        wstr_printf(&s, L"sort=%d\n", sortcol);
+        wstr_printf(&s, L"sort_numeric=%d\n", jbool(p, "sort_numeric", 0));
+        wstr_printf(&s, L"sort_desc=%d\n", jbool(p, "sort_desc", 0));
+    }
+
+    wchar_t *keep = jw(a, p, "keep");
+    if (keep[0]) wstr_printf(&s, L"keep=%ls\n", keep);
+
+    int fcol = jint(p, "filter_col", -1);
+    if (fcol >= 0) {
+        wchar_t *fm = jw(a, p, "filter_mode");
+        wchar_t *fv = jw(a, p, "filter_value");
+        if (!fm[0]) fm = arena_wcsdup(a, L"contains");
+        wstr_printf(&s, L"filter=%d,%ls,%ls\n", fcol, fm, fv);
+    }
+
+    int rc = table_make_spec(s.data ? s.data : L"", spec, cch);
+    wstr_free(&s);
+    return rc;
+}
+
+typedef struct {
+    Vec      srcs;
+    Vec      dsts;
+    wchar_t *spec;
+} TableSpec;
+
+static void add_table_action(Plan *plan, void *ud) {
+    TableSpec *sp = (TableSpec *)ud;
+    for (size_t i = 0; i < sp->srcs.len; ++i) {
+        const wchar_t *s = (const wchar_t *)sp->srcs.items[i];
+        const wchar_t *d = (const wchar_t *)sp->dsts.items[i];
+        Action *a = plan_add(plan, L"table", s, d, L"生成 CSV");
+        if (!a) continue;
+        a->produce_only = 1;
+        a->generator = arena_wcsdup(plan->arena, sp->spec);
+        a->producer  = arena_wcsdup(plan->arena, L"写出表格结果");
+    }
+}
+
+/* 扫一个目录，列出可处理的表格文件 */
+static int m_table_scan(ApiState *st, Arena *a, const JsonValue *p,
+                        Str *out, Str *err) {
+    (void)st;
+    wchar_t *dir = jw(a, p, "dir");
+    if (!dir[0]) FAIL("请先选择文件夹。");
+    if (!lc_is_dir(dir)) return fail_w(err, L"文件夹不存在：%ls", dir);
+
+    int recursive = jbool(p, "recursive", 0);
+    FileList fl;
+    filelist_init(&fl, a);
+    if (lc_scan_dir(dir, recursive, 1, 1, &fl) != 0) FAIL("无法读取目录");
+
+    long long n = 0;
+    str_puts(out, "{\"items\":[");
+    for (size_t i = 0; i < fl.n && n < 2000; ++i) {
+        const wchar_t *e = lc_extname(fl.paths[i]);
+        if (!lc_wcs_ieq(e, L".xlsx") && !lc_wcs_ieq(e, L".xlsm") &&
+            !lc_wcs_ieq(e, L".csv")  && !lc_wcs_ieq(e, L".tsv"))
+            continue;
+
+        if (n) str_putc(out, ',');
+        str_puts(out, "{\"path\":");
+        json_escape_to(out, fl.paths[i]);
+        str_puts(out, ",\"name\":");
+        json_escape_to(out, lc_basename(fl.paths[i]));
+        str_puts(out, ",\"ext\":");
+        json_escape_to(out, e);
+        str_printf(out, ",\"size\":%lld", lc_size_of(fl.paths[i]));
+
+        /*
+         * 顺带把前几行读出来，让界面能显示表头 —— 用户要按列筛选 / 排序，
+         * 得先看见列名是什么。读失败（加密、损坏）就标记一下，不中断列表。
+         */
+        Table t;
+        wchar_t e2[256]; e2[0] = 0;
+        if (load_table_pub(fl.paths[i], &t, e2, 256) == 0) {
+            str_printf(out, ",\"rows\":%llu,\"cols\":%llu,\"header\":[",
+                       (unsigned long long)t.nrows, (unsigned long long)t.ncols);
+            for (size_t c = 0; c < t.ncols && c < 40; ++c) {
+                if (c) str_putc(out, ',');
+                json_escape_to(out, table_get(&t, 0, c));
+            }
+            str_puts(out, "]");
+            table_free(&t);
+        } else {
+            str_puts(out, ",\"rows\":0,\"cols\":0,\"header\":[],\"error\":");
+            json_escape_to(out, e2);
+        }
+        str_putc(out, '}');
+        n++;
+    }
+    str_printf(out, "],\"count\":%lld}", n);
+    return 0;
+}
+
+static int m_table_preview(ApiState *st, Arena *a, const JsonValue *p,
+                           Str *out, Str *err) {
+    wchar_t *dir = jw(a, p, "dir");
+    if (!dir[0]) FAIL("请先选择文件夹。");
+    if (!lc_is_dir(dir)) return fail_w(err, L"文件夹不存在：%ls", dir);
+
+    wchar_t *outname = jw(a, p, "out");
+    if (!outname[0]) outname = arena_wcsdup(a, L"表格结果.csv");
+    /* 只收文件名，不接受路径 —— 输出目录由 dir 决定 */
+    const wchar_t *base = lc_basename(outname);
+
+    /* 选中的文件（相对路径）；没给就表示合并目录下所有表格 */
+    Vec sel;
+    vec_init(&sel);
+    const JsonValue *arr = json_get(p, "files");
+    if (arr && json_is_array(arr)) {
+        size_t n = json_array_len(arr);
+        for (size_t i = 0; i < n; ++i) {
+            const char *s = json_string(json_at(arr, i), NULL);
+            if (!s) continue;
+            wchar_t *w = lc_utf8_to_wcs(s);
+            if (w) { vec_push(&sel, arena_wcsdup(a, w)); free(w); }
+        }
+    }
+
+    Vec files;
+    vec_init(&files);
+    if (sel.len > 0) {
+        for (size_t i = 0; i < sel.len; ++i) vec_push(&files, sel.items[i]);
+    } else {
+        FileList fl;
+        filelist_init(&fl, a);
+        if (lc_scan_dir(dir, jbool(p, "recursive", 0), 1, 1, &fl) != 0) FAIL("无法读取目录");
+        for (size_t i = 0; i < fl.n; ++i) {
+            const wchar_t *e = lc_extname(fl.paths[i]);
+            if (!lc_wcs_ieq(e, L".xlsx") && !lc_wcs_ieq(e, L".xlsm") &&
+                !lc_wcs_ieq(e, L".csv")  && !lc_wcs_ieq(e, L".tsv"))
+                continue;
+
+            /*
+             * 不能把**输出文件本身**当输入。
+             *
+             * 产物默认就写在源目录里，所以"合并目录下所有表格"这个模式下，
+             * 第二次运行会把上一次的结果也读进来 —— 结果一次比一次胖，
+             * 而且用户完全看不出来是怎么胖起来的。
+             */
+            if (lc_wcs_ieq(lc_basename(fl.paths[i]), base)) continue;
+            /* 相对路径 */
+            size_t dl = wcslen(dir);
+            const wchar_t *rel = fl.paths[i] + dl;
+            while (*rel == L'\\' || *rel == L'/') ++rel;
+            vec_push(&files, arena_wcsdup(a, rel));
+        }
+    }
+
+    if (files.len == 0) {
+        vec_free(&files); vec_free(&sel);
+        FAIL("这个目录下没有找到可处理的表格（支持 xlsx / xlsm / csv / tsv）。");
+    }
+
+    const wchar_t *op = (files.len > 1) ? L"merge" : L"single";
+
+    wchar_t spec[1 << 16];
+    if (table_build_spec(a, p, op, dir, &files, base, spec, sizeof(spec)) != 0) {
+        vec_free(&files); vec_free(&sel);
+        FAIL("参数太多或太长，请减少一次合并的文件数量。");
+    }
+
+    /* 输出路径：和源同目录。src 取第一个输入文件（它一定存在，
+       这样 src 不是目录，也就不会触发"目标在源内部"那个冲突判定）。 */
+    WStr outp;
+    wstr_init(&outp);
+    wstr_puts(&outp, dir);
+    if (dir[wcslen(dir) - 1] != L'\\') wstr_putc(&outp, L'\\');
+    wstr_puts(&outp, base);
+
+    WStr srcp;
+    wstr_init(&srcp);
+    wstr_puts(&srcp, dir);
+    if (dir[wcslen(dir) - 1] != L'\\') wstr_putc(&srcp, L'\\');
+    wstr_puts(&srcp, (const wchar_t *)files.items[0]);
+
+    TableSpec sp;
+    vec_init(&sp.srcs);
+    vec_init(&sp.dsts);
+    sp.spec = arena_wcsdup(a, spec);
+    vec_push(&sp.srcs, arena_wcsdup(a, srcp.data));
+    vec_push(&sp.dsts, arena_wcsdup(a, outp.data));
+
+    WStr title;
+    wstr_init(&title);
+    if (files.len > 1)
+        wstr_printf(&title, L"合并预览 — 把 %llu 个表格合并为「%ls」",
+                    (unsigned long long)files.len, base);
+    else
+        wstr_printf(&title, L"表格预览 — 处理为「%ls」", base);
+
+    wstr_free(&srcp);
+    wstr_free(&outp);
+
+    int rc = make_artifact_plan(st, dir, title.data, L"table", POLICY_RENAME,
+                                add_table_action, NULL, &sp, out, err);
+    wstr_free(&title);
+    vec_free(&sp.srcs);
+    vec_free(&sp.dsts);
+    vec_free(&files);
+    vec_free(&sel);
     return rc;
 }
 
@@ -2113,12 +2932,27 @@ static const MethodEntry METHODS[] = {
     {"rename.preview", m_rename_preview},
     {"organize.preview", m_organize_preview},
     {"organize.scan", m_organize_scan},
+    {"categories.list", m_categories_list},
+    {"categories.reload", m_categories_reload},
+    {"categories.open", m_categories_open},
+    {"backup.scan", m_backup_scan},
+    {"backup.preview", m_backup_preview},
+    {"backup.verify", m_backup_verify},
+    {"watch.start", m_watch_start},
+    {"watch.stop", m_watch_stop},
+    {"watch.poll", m_watch_poll},
+    {"watch.clear", m_watch_clear},
+    {"watch.preview", m_watch_preview},
+    {"table.scan", m_table_scan},
+    {"table.preview", m_table_preview},
     {"dedup.scan", m_dedup_scan},
     {"dedup.preview", m_dedup_preview},
     {"summarize.file", m_summarize_file},
     {"summarize.batch", m_summarize_batch},
     {"export.run", m_export_run},
     {"convert.preview", m_convert_preview},
+    {"findrep.scan", m_findrep_scan},
+    {"findrep.preview", m_findrep_preview},
     {"convert.engines", m_convert_engines},
     {"plan.get", m_plan_get},
     {"plan.toggle", m_plan_toggle},

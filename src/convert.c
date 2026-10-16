@@ -570,6 +570,24 @@ int lc_generate_artifact(const wchar_t *generator, const wchar_t *src,
         return -1;
     }
 
+    /*
+     * "edit:<flags>:<hexfind>:<hexreplace>" —— 文本内容批量查找替换。
+     *
+     * 这里传进来的 src 是**回收站里的原始副本**，dst 是原路径。
+     * 由 planner 在拆解步骤时安排成 MOVE(原文件→回收站) + CREATE(原路径)，
+     * 所以逆序回退会先删掉改过的版本、再把原件搬回来 —— 内容能完整还原。
+     *
+     * 放在最前面判断，因为它和下面的导出/转换没有重叠。
+     */
+    if (lc_wcs_starts_ci(generator, L"edit:")) {
+        return findrep_apply(generator, src, dst, err, errcch);
+    }
+
+    /* "tbl:<hex>" —— 表格处理（筛选 / 排序 / 选列 / 合并）产出的 CSV */
+    if (lc_wcs_starts_ci(generator, L"tbl:")) {
+        return table_generate(generator, src, dst, err, errcch);
+    }
+
     /* "export:docx" —— 由 Markdown 源文件导出 */
     if (lc_wcs_starts_ci(generator, L"export:")) {
         const wchar_t *fmt = generator + 7;

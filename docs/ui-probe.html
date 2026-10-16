@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<!--
+  界面样式的离线校验页。
+
+  用途：把**真实的** webui/styles.css 引进来，摆上各个页面的代表性元素，
+  然后用 Edge 无头模式截图。这样能确认：
+    · CSS 没有语法错误（写错一个括号，后面的规则会整段失效）
+    · 新加的规则没有把既有布局挤坏
+
+  注意这个文件不参与打包，只是开发时的检查工具。
+  它引用的路径是 ../webui/styles.css。
+-->
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<link rel="stylesheet" href="../webui/styles.css">
+<style>
+  /* 只为了把多个区块并排塞进一张图，不改变被测样式 */
+  body { margin: 0; padding: 20px; background: var(--canvas); }
+  .probe { margin-bottom: 22px; }
+  .probe-label { font: 600 12px/1 var(--font-ui); color: var(--ink-3);
+                 margin-bottom: 8px; letter-spacing: .04em; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+</style>
+</head>
+<body>
+
+<div class="probe">
+  <div class="probe-label">按钮与焦点环</div>
+  <div class="row">
+    <button class="btn btn-primary">主按钮</button>
+    <button class="btn">次按钮</button>
+    <button class="btn btn-quiet">安静按钮</button>
+    <button class="btn btn-primary" id="focused">聚焦中的按钮（应为 2px 品牌色描边）</button>
+    <button class="btn" disabled>禁用</button>
+    <span class="chip">普通 chip</span>
+    <span class="chip" id="focusedChip">聚焦 chip</span>
+  </div>
+</div>
+
+<div class="probe">
+  <div class="probe-label">步骤条（第 2 步完成、第 3 步当前、连接线应渐变）</div>
+  <ol class="stepper" style="max-width:760px">
+    <li class="is-done"><b>1</b><span>选择文件夹</span></li>
+    <li class="is-done"><b>2</b><span>设置规则</span></li>
+    <li class="is-active"><b>3</b><span>预览确认</span></li>
+    <li><b>4</b><span>执行 / 回退</span></li>
+  </ol>
+</div>
+
+<div class="probe">
+  <div class="probe-label">预览表格（前 12 行应有错落入场动画）</div>
+  <div class="table-card" style="max-width:1000px">
+    <div class="table-scroll">
+      <table class="table">
+        <thead><tr>
+          <th class="c-sel"></th><th class="c-no">#</th><th class="c-lv">状态</th>
+          <th class="c-a">旧状态</th><th class="c-arrow"></th><th class="c-b">新状态</th>
+          <th class="c-note">冲突 / 备注</th>
+        </tr></thead>
+        <tbody>
+          <tr><td><div class="check on" tabindex="0">✓</div></td><td class="mono muted">1</td>
+              <td><span class="pill pill-info">正常</span></td>
+              <td><div class="path path-old"><span class="path-dir">D:\照片\</span>IMG_0001.jpg</div></td>
+              <td class="arrow-cell">→</td>
+              <td><div class="path path-new"><span class="path-dir">D:\照片\</span>2026-03-15_Canon EOS R6_001.jpg</div></td>
+              <td><div class="note-cell">替换 1 处</div></td></tr>
+          <tr><td><div class="check on" tabindex="-1">✓</div></td><td class="mono muted">2</td>
+              <td><span class="pill pill-info">正常</span></td>
+              <td><div class="path path-old"><span class="path-dir">D:\照片\</span>IMG_0002.jpg</div></td>
+              <td class="arrow-cell">→</td>
+              <td><div class="path path-new"><span class="path-dir">D:\照片\</span>2025-07-04_NIKON Z6_2_002.jpg</div></td>
+              <td><div class="note-cell note-warn">目标已存在，将自动改名</div></td></tr>
+          <tr class="is-off"><td><div class="check" tabindex="-1"></div></td><td class="mono muted">3</td>
+              <td><span class="pill pill-warn">跳过</span></td>
+              <td><div class="path path-old"><span class="path-dir">D:\照片\</span>no_exif.jpg</div></td>
+              <td class="arrow-cell">→</td>
+              <td><div class="path path-new"><span class="path-dir">D:\照片\</span>未知_未知_003.jpg</div></td>
+              <td><div class="note-cell">读不到 EXIF</div></td></tr>
+          <tr class="is-blocked"><td><div class="check disabled" tabindex="-1"></div></td><td class="mono muted">4</td>
+              <td><span class="pill pill-danger">冲突</span></td>
+              <td><div class="path path-old"><span class="path-dir">D:\照片\</span>a.jpg</div></td>
+              <td class="arrow-cell">→</td>
+              <td><div class="path path-new"><span class="path-dir">D:\照片\</span>b.jpg</div></td>
+              <td><div class="note-cell note-danger">源文件不存在</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="table-foot">共 4 行 —— 点击任意一行即可勾选或取消。</div>
+  </div>
+</div>
+
+<div class="probe">
+  <div class="probe-label">提示条（四种语气）</div>
+  <div style="max-width:760px">
+    <div class="callout callout-info"><b>信息</b><span>配置里有问题的那一行会被跳过，其余规则照常生效。</span></div>
+    <div class="callout callout-success"><b>成功</b><span>回退完成，9 个文件已逐字节恢复原状。</span></div>
+    <div class="callout callout-warn"><b>注意</b><span>二进制文件会被自动跳过。</span></div>
+    <div class="callout callout-error"><b>错误</b><span>源文件不存在，无法执行。</span></div>
+  </div>
+</div>
+
+<div class="probe">
+  <div class="probe-label">进度条与卡片</div>
+  <div class="row" style="align-items:stretch">
+    <div class="card" style="flex:1;max-width:360px">
+      <div class="card-head"><h2>卡片标题</h2><p>卡片说明文字。</p></div>
+      <div class="progress"><div class="progress-fill" style="width:64%"></div></div>
+      <div class="field" style="margin-top:12px">
+        <label>输入框</label>
+        <input class="input" value="测试内容">
+      </div>
+      <label class="switch" style="margin-top:12px">
+        <input type="checkbox" checked><span></span><em>开关（已开）</em>
+      </label>
+    </div>
+    <div class="card" style="flex:1;max-width:360px">
+      <div class="card-head"><h2>自定义分类</h2><p>已启用 4 个。</p></div>
+      <div class="cat-row"><span class="cat-name">发票</span><span class="cat-order">#10</span>
+        <span class="cat-rules"><span class="cat-tag">扩展名 <b>pdf、ofd</b></span></span></div>
+      <div class="cat-row"><span class="cat-name">设计稿</span><span class="cat-order">#30</span>
+        <span class="cat-rules"><span class="cat-tag">扩展名 <b>psd、ai</b></span></span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // 让两个元素带上真实的键盘焦点，以便截出 :focus-visible 的样子
+  window.addEventListener('load', () => {
+    document.getElementById('focused').focus();
+
+    /*
+     * 降低动效偏好的**可验证**自检。
+     *
+     * 静态截图证明不了动画有没有真的被关掉 —— 必须把计算后的样式读出来。
+     * 结果写进 #probe-result，配合 Edge 的 --dump-dom 输出，就能断言。
+     */
+    const card  = document.querySelector('.card');
+    const row   = document.querySelector('.table tbody tr');
+    const view  = document.querySelector('.view') || document.body;
+    const btn   = document.querySelector('.btn');
+    const cs = el => el ? getComputedStyle(el) : null;
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const body = cs(document.body);
+    const el = document.getElementById('probe-result');
+    el.textContent = JSON.stringify({
+      reduced,
+      // 整棵树的基础时长（reduced 时应该是 0.001ms）
+      baseTransition: body.transitionDuration,
+      cardTransition: card ? cs(card).transitionDuration : '',
+      // 卡片入场动画
+      cardAnimation: card ? cs(card).animationName + '/' + cs(card).animationDuration : '',
+      // 表格行入场动画
+      rowAnimation: row ? cs(row).animationName + '/' + cs(row).animationDuration : '',
+      // 按钮按下的缩放（reduced 时应为 none）
+      btnAnimation: btn ? cs(btn).animationName : '',
+      // 焦点环必须**始终**存在，不能因为降低动效就取消
+      focusOutline: cs(document.getElementById('focused')).outlineWidth,
+      focusStyle: cs(document.getElementById('focused')).outlineStyle,
+    });
+  });
+</script>
+
+<!-- 自检结果写在这里，用 --dump-dom 读出来 -->
+<div id="probe-result" style="display:none"></div>
+</body>
+</html>

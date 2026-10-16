@@ -159,6 +159,455 @@ async function doConvertPreview() {
   } catch (e) { toast('error', '生成预览失败', e.message, 9000); }
 }
 
+/* ============================================== 文本批量查找替换 ======= */
+
+function findrepConfig() {
+  return {
+    dir: val('#findrep-dir'),
+    find: val('#findrep-find'),
+    replace: val('#findrep-replace'),
+    regex: on('#findrep-regex'),
+    ignore_case: on('#findrep-icase'),
+    recursive: on('#findrep-recursive'),
+    any_ext: on('#findrep-anyext'),
+    include: val('#findrep-include'),
+    exclude: val('#findrep-exclude'),
+    max_mb: num('#findrep-maxmb', 64) || 64,
+    samples: 6,
+  };
+}
+
+const ENC_NAME = ['UTF-8', 'UTF-8 (BOM)', 'UTF-16 LE', 'UTF-16 BE', 'GBK'];
+
+async function doFindrepScan() {
+  const cfg = findrepConfig();
+  if (!cfg.dir) { toast('warn', '请先选择文件夹'); return; }
+  if (!cfg.find) { toast('warn', '请填写要查找的内容'); return; }
+
+  const btn = $('#btn-findrep-scan');
+  btn.disabled = true;
+  const old = btn.innerHTML;
+  btn.textContent = '扫描中…';
+  try {
+    const r = await call('findrep.scan', cfg);
+    const st = r.stats || {};
+    $('#findrep-result').hidden = false;
+    $('#findrep-summary').textContent =
+      `扫描 ${st.scanned} 个文件，命中 ${st.files} 个、共 ${st.matches} 处匹配`
+      + `　·　跳过：二进制 ${st.skipped_binary} · 体积超限 ${st.skipped_big}`
+      + ` · 扩展名不符 ${st.skipped_ext} · 读不了 ${st.unreadable}`;
+
+    const tb = $('#findrep-hits');
+    if (!r.hits || !r.hits.length) {
+      tb.innerHTML = `<tr><td colspan="3"><div class="empty">${I.empty}
+        <h3>没有匹配</h3><p>换个查找内容，或调整处理范围。</p></div></td></tr>`;
+      $('#findrep-foot').textContent = '';
+    } else {
+      tb.innerHTML = r.hits.map(h => `<tr>
+        <td class="mono muted">${h.line}</td>
+        <td><div class="path">${esc(h.before)}</div></td>
+        <td><div class="path path-new">${esc(h.after)}</div></td>
+      </tr>`).join('');
+      $('#findrep-foot').textContent =
+        `只显示前 ${r.hits.length} 条样例；每个文件最多取几条。完整清单在生成预览后可见。`;
+    }
+    toast('ok', '扫描完成', `命中 ${st.files} 个文件、共 ${st.matches} 处`, 5000);
+  } catch (e) {
+    $('#findrep-result').hidden = true;
+    toast('error', '扫描失败', e.message, 9000);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = old;
+  }
+}
+
+async function doFindrepPreview() {
+  const cfg = findrepConfig();
+  if (!cfg.dir) { toast('warn', '请先选择文件夹'); return; }
+  if (!cfg.find) { toast('warn', '请填写要查找的内容'); return; }
+  try {
+    const payload = await call('findrep.preview', cfg);
+    setStep('findrep', 2);
+    renderPreview(payload, 'findrep');
+    const st = payload.stats || {};
+    toast('ok', '预览已生成',
+          `将改写 ${st.executable} 个文件的内容；原内容会先进回收站，可回退`, 6000);
+  } catch (e) { toast('error', '生成预览失败', e.message, 9000); }
+}
+
+/* ============================================== 自定义分类 ============= */
+
+function renderCategories(res) {
+  $('#category-path').textContent = res.config_path || '—';
+
+  const items = res.items || [];
+  $('#category-count').textContent = items.length
+    ? `已启用 ${items.length} 个自定义分类`
+    : '当前没有启用任何自定义分类（全部走内置规则）';
+
+  const box = $('#category-list');
+  if (!items.length) {
+    box.innerHTML = `<div class="cat-empty">还没有自定义分类。
+      点「打开配置文件」，把示例段落的行首分号去掉，或者照格式自己写一段，
+      回来点「重新载入」即可生效。</div>`;
+  } else {
+    box.innerHTML = items.map(it => {
+      const bits = [];
+      if (it.exts) bits.push(`<span class="cat-tag">扩展名 <b>${esc(it.exts)}</b></span>`);
+      if (it.keywords) bits.push(`<span class="cat-tag">文件名含 <b>${esc(it.keywords)}</b></span>`);
+      if (it.regex) bits.push(`<span class="cat-tag">正则 <b>${esc(it.regex)}</b></span>`);
+      return `<div class="cat-row">
+        <span class="cat-name">${esc(it.name)}</span>
+        <span class="cat-order" title="优先级：数字小的先匹配">#${it.order}</span>
+        <span class="cat-rules">${bits.join('') || '<em>没有任何条件，永远不会命中</em>'}</span>
+      </div>`;
+    }).join('');
+  }
+
+  const warnBox = $('#category-warn');
+  if (res.warn) {
+    warnBox.hidden = false;
+    warnBox.innerHTML = `<b>配置里有问题，那一行已跳过</b><span>${esc(res.warn)}</span>`;
+  } else {
+    warnBox.hidden = true;
+  }
+}
+
+async function loadCategories() {
+  try {
+    renderCategories(await call('categories.list', {}));
+  } catch (e) {
+    $('#category-count').textContent = '读取配置失败';
+  }
+}
+
+async function reloadCategories() {
+  const btn = $('#btn-category-reload');
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = '载入中…';
+  try {
+    const res = await call('categories.reload', {});
+    renderCategories(res);
+    const n = (res.items || []).length;
+    if (res.created) toast('ok', '已创建配置文件模板', '照里面的说明改，改完点「重新载入」', 8000);
+    else if (res.warn) toast('warn', '已载入，但有问题', res.warn, 10000);
+    else toast('ok', '已重新载入', `${n} 个自定义分类生效`, 4500);
+  } catch (e) {
+    toast('error', '载入失败', e.message, 9000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+async function openCategoryConfig() {
+  try {
+    await call('categories.open', {});
+    toast('ok', '已打开配置文件', '改完记得回到这里点「重新载入」', 7000);
+  } catch (e) {
+    toast('error', '打不开配置文件', e.message, 9000);
+  }
+}
+
+/* ============================================== 备份 / 同步 ============ */
+
+function backupConfig() {
+  return {
+    src: val('#backup-src'),
+    dst: val('#backup-dst'),
+    recursive: on('#backup-recursive'),
+    skip_hidden: on('#backup-skiphidden'),
+    strict: on('#backup-strict'),
+    include: val('#backup-include'),
+    exclude: val('#backup-exclude'),
+    max_mb: num('#backup-maxmb', 8192) || 8192,
+  };
+}
+
+const fmtSize = n => {
+  n = Number(n) || 0;
+  if (n >= 1073741824) return (n / 1073741824).toFixed(2) + ' GB';
+  if (n >= 1048576)    return (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024)       return (n / 1024).toFixed(0) + ' KB';
+  return n + ' B';
+};
+
+async function doBackupScan() {
+  const cfg = backupConfig();
+  if (!cfg.src) { toast('warn', '请先选择源文件夹'); return; }
+  if (!cfg.dst) { toast('warn', '请先选择目标文件夹'); return; }
+
+  const btn = $('#btn-backup-scan');
+  btn.disabled = true;
+  const old = btn.innerHTML;
+  btn.textContent = '分析中…';
+  try {
+    const r = await call('backup.scan', cfg);
+    const st = r.stats || {};
+    $('#backup-result').hidden = false;
+    $('#backup-summary').textContent =
+      `扫描 ${st.scanned} 个文件 —— 需复制 ${st.new} 个新增 + ${st.diff} 个更新`
+      + `（合计 ${fmtSize(st.bytes)}），${st.same} 个已相同会跳过`
+      + `　·　过滤掉：扩展名 ${st.skipped_ext} · 体积超限 ${st.skipped_size}`;
+
+    const tb = $('#backup-items');
+    const items = r.items || [];
+    if (!items.length) {
+      tb.innerHTML = `<tr><td colspan="3"><div class="empty">${I.empty}
+        <h3>目标已经是最新的</h3><p>所有文件都相同，不需要复制。</p></div></td></tr>`;
+      $('#backup-foot').textContent = '';
+    } else {
+      tb.innerHTML = items.map(it => {
+        const tag = it.state === 0
+          ? '<span class="pill pill-info">新增</span>'
+          : '<span class="pill pill-warn">更新</span>';
+        return `<tr><td>${tag}</td>
+          <td><div class="path path-new">${esc(it.rel)}</div></td>
+          <td class="mono muted">${fmtSize(it.size)}</td></tr>`;
+      }).join('');
+      $('#backup-foot').textContent = items.length >= 3000
+        ? '只列出前 3000 条；执行时会处理全部。'
+        : `共 ${items.length} 条需要复制（内容相同的文件未列出）。`;
+    }
+    toast('ok', '分析完成',
+          `需复制 ${(st.new || 0) + (st.diff || 0)} 个文件，${fmtSize(st.bytes)}`, 6000);
+  } catch (e) {
+    $('#backup-result').hidden = true;
+    toast('error', '分析失败', e.message, 9000);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = old;
+  }
+}
+
+async function doBackupPreview() {
+  const cfg = backupConfig();
+  if (!cfg.src) { toast('warn', '请先选择源文件夹'); return; }
+  if (!cfg.dst) { toast('warn', '请先选择目标文件夹'); return; }
+  try {
+    const payload = await call('backup.preview', cfg);
+    setStep('backup', 2);
+    renderPreview(payload, 'backup');
+    const st = payload.stats || {};
+    toast('ok', '预览已生成',
+          `将复制 ${st.executable} 个文件；源文件不会被改动，可随时回退`, 6000);
+  } catch (e) { toast('error', '生成预览失败', e.message, 9000); }
+}
+
+/* ============================================== 文件夹监控 ============ */
+
+const WK_NAME = ['新增', '修改', '删除', '改名'];
+const WK_CLS  = ['pill-info', 'pill-warn', 'pill-danger', 'pill-info'];
+
+let watchTimer = null;
+
+function stopWatchPolling() {
+  if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
+}
+
+function renderWatch(res) {
+  const st = $('#watch-state');
+  const items = res.items || [];
+
+  if (!res.running) {
+    st.textContent = '未开始';
+    st.className = 'watch-state';
+    $('#watch-summary').textContent = '还没有开始监控。';
+    $('#watch-items').innerHTML = `<tr><td colspan="4"><div class="empty">
+      <h3>队列是空的</h3>
+      <p>选好文件夹点「开始监控」，之后往里面放文件或改文件，这里就会出现。</p>
+    </div></td></tr>`;
+    $('#watch-foot').textContent = '';
+    $('#btn-watch-preview').disabled = true;
+    $('#btn-watch-clear').disabled = true;
+    $('#btn-watch-start').disabled = false;
+    $('#btn-watch-stop').disabled = true;
+    return;
+  }
+
+  st.textContent = `监控中 · ${res.root || ''}`;
+  st.className = 'watch-state is-on';
+  $('#btn-watch-start').disabled = true;
+  $('#btn-watch-stop').disabled = false;
+
+  const n = res.count || 0;
+  $('#watch-summary').textContent = n
+    ? `记录了 ${n} 个发生变化的文件（同一个文件改多次只算一条）。`
+    : '正在监控，暂时没有变化。';
+  $('#btn-watch-preview').disabled = n === 0;
+  $('#btn-watch-clear').disabled = n === 0;
+
+  const tb = $('#watch-items');
+  if (!items.length) {
+    tb.innerHTML = `<tr><td colspan="4"><div class="empty">
+      <h3>暂时没有变化</h3>
+      <p>往监控的文件夹里放点东西，或者改一下里面的文件。</p>
+    </div></td></tr>`;
+  } else {
+    /* 最新的排在上面 —— 用户关心的是"刚刚发生了什么" */
+    tb.innerHTML = items.slice().reverse().map(it => {
+      const d = new Date((it.when || 0) * 1000);
+      const t = isNaN(d.getTime()) ? '' :
+        `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+      const cls = WK_CLS[it.kind] || 'pill-info';
+      const name = WK_NAME[it.kind] || '变化';
+      return `<tr>
+        <td><span class="pill ${cls}">${name}</span></td>
+        <td><div class="path path-new">${esc(it.rel)}</div></td>
+        <td class="mono muted">${it.count > 1 ? it.count + ' 次' : '—'}</td>
+        <td class="mono muted">${t}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  const dropped = res.dropped || 0;
+  $('#watch-foot').textContent = dropped
+    ? `队列上限 5000 条，已有 ${dropped} 条最早的被挤掉 —— 说明变化非常频繁，建议处理一次。`
+    : (n > 200 ? `只显示最近 200 条（队列共 ${n} 条）。` : '');
+}
+
+async function pollWatch() {
+  try { renderWatch(await call('watch.poll', {})); } catch (_) { /* 忽略瞬时错误 */ }
+}
+
+function startWatchPolling() {
+  stopWatchPolling();
+  pollWatch();
+  /* 1.5 秒轮询一次。监控是"看变化"的，太快没必要，太慢又显得迟钝。 */
+  watchTimer = setInterval(pollWatch, 1500);
+}
+
+async function doWatchStart() {
+  const dir = val('#watch-dir');
+  if (!dir) { toast('warn', '请先选择要监控的文件夹'); return; }
+  try {
+    await call('watch.start', { dir, recursive: on('#watch-recursive') });
+    toast('ok', '已开始监控', '变化会记在下面的队列里，不会自动处理', 5000);
+    startWatchPolling();
+  } catch (e) { toast('error', '无法开始监控', e.message, 9000); }
+}
+
+async function doWatchStop() {
+  try {
+    await call('watch.stop', {});
+    stopWatchPolling();
+    renderWatch({ running: false });
+    toast('ok', '已停止监控', '', 3500);
+  } catch (e) { toast('error', '停止失败', e.message, 9000); }
+}
+
+async function doWatchClear() {
+  try {
+    await call('watch.clear', {});
+    await pollWatch();
+    toast('ok', '队列已清空', '', 3500);
+  } catch (e) { toast('error', '清空失败', e.message, 9000); }
+}
+
+async function doWatchPreview() {
+  try {
+    const payload = await call('watch.preview', {});
+    renderPreview(payload, 'watch');
+    toast('ok', '预览已生成', '确认后才会真正整理', 5000);
+  } catch (e) { toast('error', '生成预览失败', e.message, 9000); }
+}
+
+/* ============================================== 表格处理 ============== */
+
+/* 勾选状态：文件名 -> 是否参与 */
+let tablePicked = new Set();
+
+async function doTableScan() {
+  const dir = val('#table-dir');
+  if (!dir) { toast('warn', '请先选择文件夹'); return; }
+
+  const btn = $('#btn-table-scan');
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = '扫描中…';
+  try {
+    const r = await call('table.scan', { dir, recursive: false });
+    const items = r.items || [];
+    $('#table-files-card').hidden = false;
+    tablePicked = new Set();
+
+    if (!items.length) {
+      $('#table-files').innerHTML = `<tr><td colspan="4"><div class="empty">
+        <h3>没有找到表格</h3><p>支持 xlsx / xlsm / csv / tsv。</p></div></td></tr>`;
+      $('#table-files-note').textContent = '';
+      toast('warn', '没有找到可处理的表格', '', 5000);
+      return;
+    }
+
+    $('#table-files-note').textContent =
+      `共 ${items.length} 个。勾选多个就是合并（表头只保留一份）。`;
+
+    $('#table-files').innerHTML = items.map(it => {
+      const bad = !!it.error;
+      if (!bad) tablePicked.add(it.name);
+      return `<tr class="${bad ? 'is-off' : ''}">
+        <td>${bad ? '' : `<div class="check on" data-table-pick="${esc(it.name)}">${I.check}</div>`}</td>
+        <td><div class="path path-new">${esc(it.name)}</div>
+          ${bad ? `<div class="note-cell note-warn">读不了：${esc(it.error)}</div>` : ''}</td>
+        <td class="mono muted">${bad ? '—' : `${it.rows} × ${it.cols}`}</td>
+        <td class="muted" style="font-size:12px">${(it.header || []).map(h =>
+            h ? `<span class="cat-tag">${esc(h)}</span>` : '').join(' ')}</td>
+      </tr>`;
+    }).join('');
+
+    if (!$('#table-out').value)
+      $('#table-out').value = items.length > 1 ? '合并结果.csv' : '表格结果.csv';
+    toast('ok', '扫描完成', `找到 ${items.length} 个表格`, 4500);
+  } catch (e) {
+    $('#table-files-card').hidden = true;
+    toast('error', '扫描失败', e.message, 9000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+/* 点勾选框：切换参与状态 */
+document.addEventListener('click', e => {
+  const box = e.target.closest && e.target.closest('[data-table-pick]');
+  if (!box) return;
+  const name = box.dataset.tablePick;
+  if (tablePicked.has(name)) { tablePicked.delete(name); box.classList.remove('on'); }
+  else { tablePicked.add(name); box.classList.add('on'); }
+});
+
+async function doTablePreview() {
+  const dir = val('#table-dir');
+  if (!dir) { toast('warn', '请先选择文件夹'); return; }
+
+  const cfg = {
+    dir,
+    out: val('#table-out') || '表格结果.csv',
+    encoding: val('#table-enc') || 'utf8bom',
+    files: Array.from(tablePicked),
+  };
+  const fcol = val('#table-fcol');
+  if (fcol !== '') {
+    cfg.filter_col = parseInt(fcol, 10);
+    cfg.filter_mode = val('#table-fmode') || 'contains';
+    cfg.filter_value = $('#table-fvalue').value;   /* 值不过滤首尾空格 */
+  }
+  const scol = val('#table-scol');
+  if (scol !== '') {
+    cfg.sort_col = parseInt(scol, 10);
+    cfg.sort_numeric = on('#table-snum');
+    cfg.sort_desc = on('#table-sdesc');
+  }
+  if (val('#table-keep')) cfg.keep = val('#table-keep');
+
+  try {
+    const payload = await call('table.preview', cfg);
+    renderPreview(payload, 'table');
+    toast('ok', '预览已生成', '确认后才会写出 CSV', 5000);
+  } catch (e) { toast('error', '生成预览失败', e.message, 9000); }
+}
+
 /* ==================================================== 模块 3：内容去重 == */
 
 async function doDedupScan() {
@@ -381,6 +830,10 @@ const PAGES = {
   rename:   ['批量重命名', '按规则批量改名；执行前先看对照表，随时可回退。'],
   organize: ['整理分类', '按类型、时间、名称自动归类，扫描阶段完全只读。'],
   convert:  ['格式转换', '文档与图片批量互转；内置转换断网可用，产物可回退。'],
+  findrep:  ['文本替换', '在文件内容里批量查找替换；保持原编码，二进制自动跳过，可回退。'],
+  backup:   ['备份同步', '把文件夹同步到另一个位置；只增不删，已相同的文件不重复复制，可回退。'],
+  watch:    ['实时监控', '盯着一个文件夹，记录刚刚变化的文件；只发现不自动处理，仍然预览确认后才动手。'],
+  table:    ['表格处理', '读取 xlsx / csv，做筛选、排序、选列、合并，结果写成 CSV。'],
   dedup:    ['内容去重', '按内容指纹找出「文件名不同但正文雷同」的文档。'],
   summary:  ['文档摘要', 'TextRank / TF-IDF 抽取关键句与关键词，不依赖任何 AI 模型。'],
   preview:  ['预览对照表', '确认「旧状态 → 新状态」无误后，才会真正执行。'],
@@ -398,6 +851,8 @@ function setStep(name, n) {
 }
 
 function showView(name) {
+  if (name === 'organize') loadCategories();
+  if (name === 'watch') startWatchPolling(); else stopWatchPolling();
   S.view = name;
   $$('.view').forEach(v => v.classList.toggle('is-active', v.id === `view-${name}`));
   $$('.nav-item').forEach(b => b.classList.toggle('is-active', b.dataset.view === name));
@@ -515,7 +970,7 @@ function drawRows() {
   }
 
   const MAX = 3000;
-  body.innerHTML = rows.slice(0, MAX).map(r => {
+  body.innerHTML = rows.slice(0, MAX).map((r, ri) => {
     const [cls, text] = LEVEL[r.level] || ['pill-info', r.level];
     const [od, on_] = splitPath(r.old || '');
     const [nd, nn] = splitPath(r.new || '');
@@ -524,9 +979,18 @@ function drawRows() {
     const trCls = [r.level === 'error' ? 'is-blocked' : '',
                    r.selected === '✓' ? '' : 'is-off'].join(' ');
     const blocked = r.level === 'error';
+    /*
+     * roving tabindex：整张表只有第一个勾选框在 Tab 序列里（tabindex=0），
+     * 其余是 -1。进表之后用上下键移动焦点。
+     * 不给每个都加 tabindex=0 —— 那意味着几千行的表要按几千次 Tab 才能出去。
+     */
+    const tabIdx = (ri === 0 && !blocked) ? 0 : -1;
     return `<tr class="${trCls}">
       <td><div class="check ${r.selected === '✓' ? 'on' : ''} ${blocked ? 'disabled' : ''}"
-               data-toggle="${r.index - 1}">${I.check}</div></td>
+               data-toggle="${r.index - 1}"
+               role="checkbox" aria-checked="${r.selected === '✓'}"
+               aria-label="第 ${r.index} 行"
+               tabindex="${blocked ? -1 : tabIdx}">${I.check}</div></td>
       <td class="mono muted">${r.index}</td>
       <td><span class="pill ${cls}">${text}</span></td>
       <td><div class="path path-old"><span class="path-dir">${esc(od)}</span>${esc(on_)}</div></td>
@@ -543,6 +1007,54 @@ function drawRows() {
 }
 
 /* ============================================================ 任务进度 -- */
+
+/*
+ * 预览表的键盘操作。
+ *
+ * 勾选框是 <div> 不是原生 checkbox，所以键盘支持得自己写。
+ * 用 roving tabindex：只有当前行是 tabindex=0，方向键移动时把焦点
+ * 和 tabindex 一起搬走 —— 这样 Tab 进表、Tab 出表都很干脆，
+ * 不会陷在几千个停靠点里出不来。
+ */
+(function initGridKeyboard() {
+  const body = document.getElementById('preview-body');
+  if (!body) return;
+
+  const checks = () => Array.from(body.querySelectorAll('.check:not(.disabled)'));
+  const focusAt = idx => {
+    const list = checks();
+    if (!list.length) return;
+    const i = Math.max(0, Math.min(idx, list.length - 1));
+    list.forEach((c, k) => c.setAttribute('tabindex', k === i ? '0' : '-1'));
+    list[i].focus();
+    list[i].scrollIntoView({ block: 'nearest' });
+  };
+
+  body.addEventListener('keydown', e => {
+    const box = e.target.closest('.check');
+    if (!box || box.classList.contains('disabled')) return;
+    const list = checks();
+    const i = list.indexOf(box);
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      focusAt(i + (e.key === 'ArrowDown' ? 1 : -1));
+    } else if (e.key === 'Home') {
+      e.preventDefault(); focusAt(0);
+    } else if (e.key === 'End') {
+      e.preventDefault(); focusAt(list.length - 1);
+    } else if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      /*
+       * 走 click() 而不是直接改状态：点击处理是委托在 #preview-body 上的
+       * （会调 toggleRow 去更新计划并重绘），复用它可以避免出现
+       * "键盘改了状态但表格没重绘"这种两套逻辑走岔的问题。
+       */
+      box.click();
+    }
+  });
+})();
+
 function startTask(jobId, kind) {
   S.jobId = jobId;
   $('#taskbar').hidden = false;
@@ -913,6 +1425,16 @@ function bind() {
   $('#btn-organize-preview').onclick = () => doPreview('organize');
   $('#btn-organize-scan').onclick = doScan;
   $('#btn-convert-preview').onclick = doConvertPreview;
+  $('#btn-findrep-scan').onclick = doFindrepScan;
+  $('#btn-findrep-preview').onclick = doFindrepPreview;
+  $('#btn-backup-scan').onclick = doBackupScan;
+  $('#btn-backup-preview').onclick = doBackupPreview;
+  $('#btn-watch-start').onclick = doWatchStart;
+  $('#btn-watch-stop').onclick = doWatchStop;
+  $('#btn-watch-clear').onclick = doWatchClear;
+  $('#btn-watch-preview').onclick = doWatchPreview;
+  $('#btn-table-scan').onclick = doTableScan;
+  $('#btn-table-preview').onclick = doTablePreview;
   $('#btn-dedup-scan').onclick = doDedupScan;
   $('#btn-dedup-preview').onclick = doDedupPreview;
   $('#btn-summary-file').onclick = async () => {
@@ -928,7 +1450,7 @@ function bind() {
   $('#btn-execute').onclick = doExecute;
   $('#btn-preview-dry').onclick = doDryRun;
   $('#btn-back-edit').onclick = () => {
-    const back = S.plan && S.plan.category === 'organize' ? 'organize' : 'rename';
+    const back = S.plan ? (PAGES[S.plan.category] ? S.plan.category : 'rename') : 'rename';
     setStep(back, 1);
     showView(back);
   };
@@ -1003,7 +1525,7 @@ function bind() {
       else if (S.view === 'preview') doExecute();
     }
     if (e.key === 'Escape' && S.view === 'preview') {
-      const back = S.plan && S.plan.category === 'organize' ? 'organize' : 'rename';
+      const back = S.plan ? (PAGES[S.plan.category] ? S.plan.category : 'rename') : 'rename';
       showView(back);
     }
   });

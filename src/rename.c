@@ -223,7 +223,22 @@ typedef struct {
     int            i;         /* 0 基 */
     long long      size;
     int64_t        mtime;
+
+    /* 元数据：只在模板里真的用到 {exif:...} / {id3:...} 时才去读文件。
+       一整个文件夹几千张照片，如果每个都无条件读一遍 EXIF，
+       纯属浪费 —— 绝大多数用户根本不用这些变量。 */
+    const wchar_t *path;
+    MediaMeta      meta;
+    int            meta_state;   /* 0=还没读 1=读过了 */
 } TplCtx;
+
+static const MediaMeta *tpl_meta(TplCtx *c) {
+    if (c->meta_state == 0) {
+        c->meta_state = 1;
+        if (c->path) meta_read(c->path, &c->meta);
+    }
+    return &c->meta;
+}
 
 static int apply_format_int(const wchar_t *fmt, int value, WStr *out) {
     if (!fmt || !*fmt) { wstr_printf(out, L"%d", value); return 0; }
@@ -234,7 +249,7 @@ static int apply_format_int(const wchar_t *fmt, int value, WStr *out) {
     return 0;
 }
 
-static int render_template(const wchar_t *tpl, const TplCtx *ctx,
+static int render_template(const wchar_t *tpl, TplCtx *ctx,
                            WStr *out, wchar_t *err, size_t errcch) {
     const wchar_t *p = tpl;
     while (*p) {
@@ -297,10 +312,52 @@ static int render_template(const wchar_t *tpl, const TplCtx *ctx,
             struct tm tmv;
             if (localtime_s(&tmv, &t) == 0) wcsftime(buf, 64, dfmt, &tmv);
             wstr_puts(out, buf);
+        } else if (wcscmp(token, L"exif") == 0 || wcscmp(token, L"id3") == 0) {
+            /*
+             * 元数据变量：{exif:model}、{exif:date:%Y%m%d}、{id3:artist}
+             *
+             * token 已经被按第一个冒号切过了，所以这里 fmt 里装的是
+             * "date:%Y%m%d" 这种"字段名[ : 日期格式 ]"。再切一次。
+             */
+            if (!fmt || !*fmt) {
+                swprintf(err, errcch,
+                         L"{%ls:} 后面要写字段名。exif 可用："
+                         L"date year make model lens iso fnum exposure focal w h；"
+                         L"id3 可用：title artist album year track genre",
+                         token);
+                return -1;
+            }
+
+            wchar_t key[64];
+            wcsncpy(key, fmt, 63);
+            key[63] = 0;
+            const wchar_t *datefmt = NULL;
+            wchar_t *c2 = wcschr(key, L':');
+            if (c2) { *c2 = 0; datefmt = c2 + 1; }
+
+            wchar_t buf[256];
+            const wchar_t *v = meta_lookup(tpl_meta(ctx), token, key, datefmt,
+                                           buf, 256);
+            if (v) {
+                wstr_puts(out, v);
+            } else {
+                /*
+                 * 没有这个字段。
+                 *
+                 * 这里刻意**不报错、不跳过**，而是写一个一眼能认出来的占位符，
+                 * 因为：跳过会让用户以为文件少了；报错会让整批停下来；
+                 * 留空则会产生 "_.jpg" 这种看不出是故意的名字。
+                 *
+                 * 写「未知」的话，预览表里一眼就能看出哪些文件没读到元数据，
+                 * 用户可以自己决定是去掉这几行还是先补元数据。
+                 */
+                wstr_puts(out, L"未知");
+            }
         } else {
             swprintf(err, errcch,
                      L"模板里的变量「{%ls}」不存在。可用变量："
-                     L"name ext extname n i parent size mtime date year month day",
+                     L"name ext extname n i parent size mtime date year month day "
+                     L"exif:字段 id3:字段",
                      token);
             return -1;
         }
@@ -352,6 +409,7 @@ int rename_new_name(const wchar_t *path, int index, const RenameRule *r,
         ctx.i = index - 1;
         ctx.size = lc_size_of(path);
         ctx.mtime = 0;
+        ctx.path = path;      /* {exif:...} / {id3:...} 要靠它去读文件 */
         WIN32_FILE_ATTRIBUTE_DATA fad;
         wchar_t *lp = lc_long_path(path);
         if (lp && GetFileAttributesExW(lp, GetFileExInfoStandard, &fad))

@@ -353,6 +353,16 @@ typedef struct Action {
     /* meta */
     int      is_copy;
     int      produce_only;
+
+    /*: 原地改文件内容（文本批量查找替换用）。
+        置 1 时 planner 会把步骤拆成两条：
+            MOVE(原文件 → 回收站)  +  CREATE(原路径)
+        这样逆序回退天然正确 —— 先删掉改过的版本，再把原件搬回来。
+        如果只写一条 CREATE，回退就只会删掉新文件，原内容永远找不回来。
+        另外它还要配 force_exec=1：因为 src 和 dst 是同一个路径，
+        action_changed() 会认为"没有变化"，不加这个就不会执行。 */
+    int      inplace_edit;
+
     wchar_t *producer;
     /*: 产物生成规格，交给 executor 在 CREATE 步骤里执行。
         这样"导出 / 格式转换"产出的新文件同样进日志、同样可回退。 */
@@ -510,6 +520,186 @@ typedef struct {
     int      files_only;
 } OrganizeRule;
 
+/* ------------------------------------------------------------------ 文件夹监控
+ *
+ * 监控**只负责发现**，把变化的文件放进队列；要不要处理由用户点一下再说。
+ *
+ * 这么设计是因为"实时监控"的常见形态（监控到变化就自动处理）和本项目的
+ * 核心承诺"先预览、再执行、可回退"是直接冲突的：自动处理意味着用户
+ * 还没看过预览，文件就已经被动了。
+ *
+ * 也就是说：**监控永远不会自己动你的文件。** 队列满、程序关了、
+ * 用户没看，都只是"这些还没处理"，不会造成任何意外改动。
+ */
+typedef struct Watcher Watcher;
+
+/* 事件类型 */
+#define WK_ADDED    0
+#define WK_MODIFIED 1
+#define WK_REMOVED  2
+#define WK_RENAMED  3
+
+Watcher *watch_start(const wchar_t *dir, int recursive, wchar_t *err, size_t errcch);
+void     watch_stop(Watcher *w);
+
+size_t    watch_count(Watcher *w);
+long long watch_dropped(Watcher *w);
+const wchar_t *watch_root(Watcher *w);
+
+int  watch_item_at(Watcher *w, size_t i, const wchar_t **rel, int *kind,
+                   long long *when, long long *count);
+
+/* 把队列拷出来并清空（只含新增/修改的项）。调用方负责释放每个字符串和数组本身。 */
+int  watch_take_all(Watcher *w, wchar_t ***paths, size_t *n_out,
+                    long long *dropped_out);
+void watch_clear(Watcher *w);
+
+/* 登记"这个路径是我们自己动的"，在 ttl_sec 秒内不再记进队列。
+   用按路径抑制而不是"静默 N 秒"：静默期间用户真改了别的文件会漏掉，
+   按路径抑制只挡住我们动过的那些，没有盲区。 */
+void watch_suppress(Watcher *w, const wchar_t *abs_path, int ttl_sec);
+/* ------------------------------------------------------------------ 表格处理
+ *
+ * xlsx / csv 的读取、筛选、排序、合并、导出。
+ *
+ * 现有的 xlsx 读取（extract.c）是给摘要和去重用的 —— 它把整张表摊平成
+ * 一段文本。表格处理要的是**单元格结构**，所以另写一套。
+ *
+ * 日期是最容易踩的坑：xlsx 里日期根本不存在，它是"一个数字 + 一个格式"。
+ * 单元格存的是 45000，靠样式告诉 Excel 显示成 2023-03-15。只读数字的话，
+ * 用户拿到的表格里所有日期都变成天书。所以这里会去读 xl/styles.xml。
+ *
+ * 输出只管 CSV，不写 xlsx。理由：CSV 到处都能打开；写 xlsx 要自己拼一套
+ * OOXML（共享字符串、样式、列宽），出错方式多而收益只是"双击能直接打开"。
+ * 与其做个半吊子的 xlsx 写出器，不如把 CSV 做扎实 —— 尤其是编码：
+ * 中文 Excel 默认按 GBK 打开 CSV，写成不带 BOM 的 UTF-8 会满屏乱码。
+ */
+typedef struct {
+    wchar_t **cells;     /* 行优先，每行 ncols 个 */
+    size_t    nrows, ncols;
+} Table;
+
+void table_init(Table *t);
+void table_free(Table *t);
+void table_set(Table *t, size_t r, size_t c, const wchar_t *val);
+const wchar_t *table_get(const Table *t, size_t r, size_t c);
+
+int  table_read_xlsx(const wchar_t *path, Table *t, wchar_t *err, size_t errcch);
+int  table_read_csv(const wchar_t *path, Table *t, wchar_t *err, size_t errcch);
+/* 按扩展名自动选读取器（xlsx / csv） */
+int  load_table_pub(const wchar_t *path, Table *t, wchar_t *err, size_t errcch);
+
+/* utf8_bom=1 写带 BOM 的 UTF-8（Excel 认得出）；0 写 GBK（老工具用） */
+int  table_write_csv(const Table *t, const wchar_t *path, int utf8_bom,
+                     wchar_t *err, size_t errcch);
+
+int  table_sort(Table *t, int col, int numeric, int desc, int has_header);
+int  table_select_cols(Table *t, const int *cols, size_t ncols);
+int  table_filter(Table *t, int col, const wchar_t *op, const wchar_t *val2,
+                  int has_header);
+int  table_append(Table *dst, const Table *src, int skip_header, int align_header);
+
+/* 生成器：tbl:<hex>，里面 hex 编码一段 key=value 参数文本。
+   整体编码而不是逐段拼 —— 参数里有路径和用户填的筛选词，
+   逐段拼就得给每个字段定一套转义规则，太容易出错。 */
+int  table_make_spec(const wchar_t *params, wchar_t *out, size_t cch);
+int  table_generate(const wchar_t *spec, const wchar_t *src, const wchar_t *dst,
+                    wchar_t *err, size_t errcch);
+/* ------------------------------------------------------------------ 备份 / 同步
+ *
+ * 这个模块**不直接搬文件**，只产出"从哪复制到哪"的清单，
+ * 再由上层变成普通的 COPY 动作送进计划 —— 于是预览、冲突检测、
+ * 一键回退全是现成的，不用另写一套。
+ *
+ * 名字叫"同步（只增不删）"而不是"镜像"：真正的镜像工具会删掉目标里
+ * 多余的文件，而这个程序承诺过"没有任何不可逆的删除"。
+ * 一次误操作把目标设成 D:\ 就会清掉整个盘，这种破坏不该藏在一个复选框里。
+ */
+typedef struct {
+    wchar_t  *src;
+    wchar_t  *dst;
+    wchar_t  *rel;        /* 相对路径，给界面显示 */
+    long long size;
+    int       state;      /* 0=新增 1=更新 2=已相同 */
+} BackupItem;
+
+typedef struct {
+    BackupItem *items;
+    size_t      n, cap;
+    long long   total_bytes;   /* 需要复制的总字节数 */
+    long long   n_new;
+    long long   n_diff;
+    long long   n_same;
+    long long   scanned;
+    long long   skipped_ext;
+    long long   skipped_size;
+} BackupScan;
+
+/* 只读分析源和目标，算出哪些文件需要复制。
+   strict=0 时按"体积 + 修改时间"判断（快，和 robocopy 一致）；
+   strict=1 时算内容哈希（慢，但能抓住体积相同内容不同的情况）。 */
+int  backup_scan(const wchar_t *src_root, const wchar_t *dst_root,
+                 const wchar_t *include, const wchar_t *exclude,
+                 int recursive, int skip_hidden, int strict, long long max_bytes,
+                 BackupScan *out, wchar_t *err, size_t errcch);
+void backup_scan_free(BackupScan *sc);
+int  backup_item_at(const BackupScan *sc, size_t i, const wchar_t **src,
+                    const wchar_t **dst, const wchar_t **rel,
+                    long long *size, int *state);
+
+/* 复制后校验：体积一致且内容哈希一致。
+   返回 0 = 一致，1 = 不一致，-1 = 读不了。
+   复制出错不一定报错 —— 磁盘满、网盘掉线都可能"成功"写出一个长度不对的文件。
+   备份最怕的不是抄错，是抄错了还不知道。 */
+int  backup_verify(const wchar_t *src, const wchar_t *dst);
+/* ------------------------------------------------------------------ 媒体元数据
+ *
+ * 从图片里读 EXIF、从音频里读 ID3，用于按拍摄时间 / 艺术家重命名。
+ *
+ * 所有字段都是宽字符串，读不到就是空串 —— 调用方只要判断 out[0]，
+ * 不必再去区分"读失败"和"这个字段本来就没有"。
+ *
+ * 为什么手写解析器：项目定的是零第三方库、目标机不装任何东西。
+ * 这两个格式只用得到一小部分字段，自己解反而可控：
+ * 读到哪算哪，遇到畸形文件当没有，绝不会崩。
+ */
+typedef struct {
+    int      has_exif;
+    wchar_t  exif_date[64];      /* 原始形式 "2026:01:15 14:30:22"；格式化交给 meta_lookup */
+    wchar_t  exif_make[64];
+    wchar_t  exif_model[64];
+    wchar_t  exif_lens[64];
+    wchar_t  exif_iso[16];
+    wchar_t  exif_fnum[16];      /* 2.8（不含 F） */
+    wchar_t  exif_exposure[24];  /* 1/250 或 2.5 */
+    wchar_t  exif_focal[16];     /* 50（不含 mm） */
+    wchar_t  exif_w[16];
+    wchar_t  exif_h[16];
+    wchar_t  exif_orient[16];
+
+    int      has_id3;
+    wchar_t  id3_title[128];
+    wchar_t  id3_artist[128];
+    wchar_t  id3_album[128];
+    wchar_t  id3_year[16];
+    wchar_t  id3_track[32];
+    wchar_t  id3_genre[64];
+} MediaMeta;
+
+/* 读一个文件的元数据。
+   返回 0 = 读到了元数据；1 = 读到了文件但里面没有元数据；-1 = 打不开。 */
+int  meta_read(const wchar_t *path, MediaMeta *out);
+
+/* 按命名空间取值。ns 是 "exif" 或 "id3"，key 是字段名（大小写不敏感）。
+   fmt 只对日期类字段有意义（如 "%Y%m%d"）。
+   命中返回可用的字符串指针，没有这个字段返回 NULL。 */
+const wchar_t *meta_lookup(const MediaMeta *m, const wchar_t *ns,
+                           const wchar_t *key, const wchar_t *fmt,
+                           wchar_t *buf, size_t cch);
+
+/* 按扩展名粗略判断这个文件有没有可能带元数据（给界面提示用） */
+int  meta_ext_maybe(const wchar_t *path);
+
 void organize_rule_init(OrganizeRule *r, Arena *a);
 void organize_rule_free(OrganizeRule *r);
 const wchar_t *organize_category_of(const wchar_t *path);
@@ -517,6 +707,10 @@ const wchar_t *organize_size_bucket(long long bytes);
 int  organize_scan(const wchar_t *root, const OrganizeRule *r, FileList *out);
 int  organize_target_rel(const wchar_t *path, const OrganizeRule *r,
                          WStr *out, wchar_t *errbuf, size_t errcch);
+/* preset 非空时只处理这些文件，不扫描目录（给文件夹监控用） */
+Plan *organize_build_plan_ex(Arena *a, const wchar_t *root, const OrganizeRule *r,
+                             Policy policy, const wchar_t *trash_root,
+                             FileList *preset);
 Plan *organize_build_plan(Arena *a, const wchar_t *root, const OrganizeRule *r,
                           Policy policy, const wchar_t *trash_root);
 
@@ -526,8 +720,42 @@ typedef struct {
     long long size;
 } CategoryStat;
 
-int organize_category_stats(const wchar_t *root, int recursive, Arena *a,
-                            CategoryStat **out, size_t *n_out,
+/* ------------------------------------------------------------------ 自定义分类
+ *
+ * 配置放在数据目录的「分类规则.ini」，用户可以自己加 [分类名] 段落，
+ * 用 ext（扩展名）/ name（文件名关键词）/ name_regex（正则）来定义。
+ * 一个文件只归一类：按 order 从小到大试，第一个命中的生效；
+ * 都没命中就退回内置规则。
+ *
+ * 选 INI 而不是 JSON，是因为这个文件是给**人**手改的：
+ * 一行一条、可以写注释、格式错了一眼能看出是哪一行。
+ */
+typedef struct CategorySet CategorySet;
+
+/* 取全局配置（首次调用时自动载入；配置文件不存在会自动生成带注释的模板） */
+CategorySet *categories_get(void);
+
+/* 重新载入。err 收致命错误，warn 收"某一行有问题但已跳过"的提示。 */
+int  categories_reload(wchar_t *err, size_t errcch,
+                       wchar_t *warn, size_t warncch, int *created);
+
+/* 配置文件路径（给界面上的"打开配置文件"用） */
+const wchar_t *categories_config_path(void);
+
+/* 按自定义规则匹配。命中返回分类名（静态生命周期）；没命中返回 NULL。 */
+const wchar_t *categories_match(const wchar_t *path);
+
+/* 给界面看的快照 */
+size_t categories_count(void);
+
+/* 取第 idx 条的完整信息。exts / kws 会用「、」拼成一句话，方便界面直接显示。
+   任何一项传 NULL 就跳过。返回 -1 表示 idx 越界。 */
+int    categories_detail(size_t idx, wchar_t *name, size_t ncch,
+                         wchar_t *exts, size_t ecch,
+                         wchar_t *kws, size_t kcch,
+                         wchar_t *regex_src, size_t rcch, int *order);
+
+int organize_category_stats(const wchar_t *root, int recursive, Arena *a,                            CategoryStat **out, size_t *n_out,
                             int *total_count, long long *total_size);
 
 /* ================================================================== 正则 */
@@ -540,6 +768,74 @@ void     regex_free(LcRegex *re);
 int      regex_replace_all(LcRegex *re, const wchar_t *input,
                            const wchar_t *repl, WStr *out);
 int      regex_matches(LcRegex *re, const wchar_t *input);
+
+/* 统计匹配次数（预览阶段用）。出错返回 -1。
+   与 regex_replace_all 用同一套推进规则，保证"预览说几处、执行就改几处"。 */
+int      regex_count_matches(LcRegex *re, const wchar_t *input);
+
+/* ==================================================== 文本批量查找替换 ==
+ *
+ * 这是第一个"改文件内容"的模块（前几个改的都是文件名和位置）。
+ *
+ * 内容改动的回退：拆成两条原子步骤，让逆序回退天然正确 ——
+ *     正向：  ① MOVE(原文件 → 回收站)   ② CREATE(原文件)
+ *     回退：  ②' 删掉改过的版本        ①' 把原件搬回来
+ * 所以回退引擎一行都不用改。
+ * ========================================================================== */
+
+/* 一条命中的样例，用来在界面上展示"改前 / 改后" */
+typedef struct {
+    wchar_t *file;
+    int      line;        /* 行号，从 1 开始 */
+    wchar_t *before;      /* 原文那一行（去掉换行、过长截断） */
+    wchar_t *after;       /* 替换后那一行 */
+} FindRepHit;
+
+typedef struct {
+    wchar_t  *path;
+    int       encoding;      /* 见 findrep.c 里的 ENC_* */
+    long long bytes;
+    int       matches;
+    int       selected;
+} FindRepFile;
+
+typedef struct {
+    FindRepFile *files;  size_t n_files, cap_files;
+    FindRepHit  *hits;   size_t n_hits,  cap_hits;
+    long long    total_matches;
+    long long    scanned;
+    long long    skipped_binary;   /* 判定为二进制，跳过 */
+    long long    skipped_big;      /* 超过体积上限 */
+    long long    skipped_ext;      /* 扩展名不在文本名单里 */
+    long long    unreadable;
+} FindRepResult;
+
+typedef struct {
+    const wchar_t *find;
+    const wchar_t *replace;
+    int            use_regex;
+    int            ignore_case;
+    int            recursive;
+    const wchar_t *include;     /* 逗号分隔的扩展名白名单；空 = 用内置文本名单 */
+    const wchar_t *exclude;     /* 逗号分隔的扩展名黑名单 */
+    int            any_ext;     /* 1 = 不限扩展名（靠二进制检测兜底） */
+    long long      max_bytes;   /* 0 = 默认 64MB */
+    int            limit;
+    int            sample_per_file;
+} FindRepOpts;
+
+/* 只读扫描：找出所有有匹配的文件。不改任何东西。 */
+int  findrep_scan(const wchar_t *dir, const FindRepOpts *o,
+                  FindRepResult *res, wchar_t *err, size_t errcch);
+void findrep_free(FindRepResult *r);
+
+/* 构造生成器规格：edit:<flags>:<hexfind>:<hexreplace> */
+int  findrep_make_spec(const FindRepOpts *o, wchar_t *out, size_t cch);
+
+/* 执行一次替换。src = 回收站里的原始副本，dst = 原路径。
+   executor 在 STEP_CREATE 里调它。 */
+int  findrep_apply(const wchar_t *spec, const wchar_t *src,
+                   const wchar_t *dst, wchar_t *err, size_t errcch);
 
 /* ================================================================== JSON */
 /* --- 写 --- */

@@ -246,8 +246,18 @@ select.input {
 }
 
 .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
-          user-select: none; white-space: nowrap; }
-.switch input { position: absolute; opacity: 0; pointer-events: none; }
+          user-select: none; white-space: nowrap;
+          /* 这里的 position 是必须的，不是顺手加的。
+             里面的 <input> 用 position:absolute 藏起来；如果 .switch 不建立
+             定位上下文，那个 input 会一路找到"初始包含块"（整个视口），
+             跑到滚动容器外面去。
+             后果：点开关时 input 获得焦点，浏览器要把它滚进视野，而它的包含块
+             在滚动容器之外 —— 滚动位置当场算错，整页内容跟着跳。
+             用户看到的就是"点一下按钮界面就错乱了"。
+             这是全站唯一一处没有定位祖先的 absolute 元素。 */
+          position: relative; }
+.switch input { position: absolute; left: 0; top: 0; width: 1px; height: 1px;
+                margin: 0; padding: 0; border: 0; opacity: 0; pointer-events: none; }
 .switch > span { width: 33px; height: 19px; border-radius: 20px; background: var(--line-strong);
   position: relative; transition: background .18s var(--ease); flex: none; }
 .switch > span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 15px;
@@ -632,3 +642,187 @@ select.input {
 .strong { color: var(--ink); font-weight: 650; }
 .danger-text { color: var(--danger); font-weight: 650; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: auto; }
+
+/* ---------------------------------------------- 自定义分类 ---- */
+.cat-head { display: flex; align-items: center; justify-content: space-between;
+            gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.cat-count { font-size: 13px; color: var(--ink-2); }
+.cat-actions { display: flex; gap: 8px; }
+.cat-list { display: flex; flex-direction: column; gap: 6px; }
+.cat-empty { font-size: 13px; color: var(--ink-3); line-height: 1.7;
+             padding: 14px; border: 1px dashed var(--line); border-radius: var(--r-2); }
+.cat-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+           padding: 8px 12px; border-radius: var(--r-2);
+           background: var(--surface-3); font-size: 13px; }
+.cat-name { font-weight: 650; color: var(--ink); }
+.cat-order { font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.cat-rules { display: flex; gap: 6px; flex-wrap: wrap; }
+.cat-tag { font-size: 11.5px; color: var(--ink-2); background: var(--surface-2);
+           border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; }
+.cat-tag b { color: var(--brand-ink); font-weight: 650; }
+.cat-path { margin-top: 12px; font-size: 12px; color: var(--ink-3); word-break: break-all; }
+.cat-path code { font-size: 11.5px; }
+/* ---------------------------------------------- 提示条 ----
+   之前几处用了 class="callout" 但没有对应样式，结果 <b> 标题和 <span> 正文
+   挤在同一行，看起来像一句话而不是一条提示。这里补上。
+   四种语气各自有自己的底色和左侧色条，颜色都走令牌，深色主题自动跟随。 */
+.callout {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 14px; padding: 11px 14px 11px 15px;
+  border-radius: var(--r-2); font-size: 12.5px; line-height: 1.65;
+  border: 1px solid var(--line); background: var(--surface-3); color: var(--ink-2);
+  border-left: 3px solid var(--line-strong);
+}
+.callout > b { display: block; color: var(--ink); font-weight: 650; font-size: 13px; }
+.callout > span { display: block; }
+.callout code { font-size: 11.5px; }
+
+.callout-info    { background: var(--brand-soft);  border-color: var(--brand-soft);
+                   border-left-color: var(--brand); }
+.callout-info > b  { color: var(--brand-ink); }
+.callout-success { background: var(--ok-soft);     border-color: var(--ok-soft);
+                   border-left-color: var(--ok); }
+.callout-success > b { color: var(--ok); }
+.callout-warn    { background: var(--warn-soft);   border-color: var(--warn-soft);
+                   border-left-color: var(--warn); }
+.callout-warn > b { color: var(--warn); }
+.callout-error   { background: var(--danger-soft); border-color: var(--danger-soft);
+                   border-left-color: var(--danger); }
+.callout-error > b { color: var(--danger); }
+/* ==========================================================================
+   界面优化：键盘焦点、步骤条进度、表格入场
+   ========================================================================== */
+
+/* ---------------------------------------------- 键盘焦点 ----
+   全站原本只有开关一处 :focus-visible，用键盘 Tab 走一圈几乎看不出焦点在哪。
+   这不只是"好看"的问题 —— 对只能用键盘操作的人来说，看不到焦点就是不能用。
+
+   用 :focus-visible 而不是 :focus：鼠标点击不会显示焦点环，
+   只有键盘导航才显示，这样不会让鼠标用户觉得界面一直在闪。 */
+.btn:focus-visible,
+.chip:focus-visible,
+.nav-item:focus-visible,
+.seg:focus-visible,
+.seg button:focus-visible,
+.input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.check:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: var(--r-2);
+}
+.input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline-offset: 0;
+  border-color: var(--brand);
+}
+/* 表格里的勾选框。
+   它是个 div，不是原生 checkbox —— 所以键盘焦点必须自己给。
+   用 roving tabindex：整张表只有一个勾选框在 Tab 序列里，
+   进去之后用上下键移动，避免几千行变成几千个 Tab 停靠点。 */
+.check:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------- 步骤条连接线 ----
+   原本连接线永远是灰的：走到第 3 步，前两段还是灰的，
+   看不出"已经走过这一段"。给它也加上完成态。 */
+.stepper li:not(:last-child)::after {
+  transition: background .28s var(--ease);
+}
+.stepper li.is-done:not(:last-child)::after {
+  background: var(--brand);
+  opacity: .45;
+}
+/* 当前步之前那一段正在"生长"，给它一点存在感 */
+.stepper li.is-active:not(:last-child)::after {
+  background: linear-gradient(90deg, var(--brand) 0%, var(--line) 100%);
+  opacity: .35;
+}
+.stepper li b { will-change: background; }
+
+/* ---------------------------------------------- 表格入场 ----
+   预览表可能有几百行。一次性砸出来的观感很生硬，但**不能**给所有行都加动画：
+   几千行同时跑动画会掉帧。只让前 12 行做错落入场，其余直接显示 ——
+   反正它们在视口外面，用户滚到的时候早就渲染完了。 */
+@keyframes rowIn {
+  from { opacity: 0; transform: translateY(4px); }
+}
+.table tbody tr:nth-child(-n+12) {
+  animation: rowIn .26s var(--ease) both;
+}
+.table tbody tr:nth-child(1)  { animation-delay: .00s; }
+.table tbody tr:nth-child(2)  { animation-delay: .02s; }
+.table tbody tr:nth-child(3)  { animation-delay: .04s; }
+.table tbody tr:nth-child(4)  { animation-delay: .06s; }
+.table tbody tr:nth-child(5)  { animation-delay: .08s; }
+.table tbody tr:nth-child(6)  { animation-delay: .10s; }
+.table tbody tr:nth-child(7)  { animation-delay: .12s; }
+.table tbody tr:nth-child(8)  { animation-delay: .14s; }
+.table tbody tr:nth-child(9)  { animation-delay: .16s; }
+.table tbody tr:nth-child(10) { animation-delay: .18s; }
+.table tbody tr:nth-child(11) { animation-delay: .20s; }
+.table tbody tr:nth-child(12) { animation-delay: .22s; }
+
+/* ---------------------------------------------- 卡片入场 ----
+   页面切换时卡片依次浮上来，比整页"唰"地出现舒服。
+   同样只做前几个 —— 长页面滚下去时不该还在动画。 */
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(10px); }
+}
+.view.is-active > .card:nth-of-type(-n+4),
+.view.is-active > .grid-2:nth-of-type(-n+2) {
+  animation: cardIn .36s var(--ease) both;
+}
+.view.is-active > *:nth-child(1) { animation-delay: .02s; }
+.view.is-active > *:nth-child(2) { animation-delay: .06s; }
+.view.is-active > *:nth-child(3) { animation-delay: .10s; }
+.view.is-active > *:nth-child(4) { animation-delay: .14s; }
+.view.is-active > *:nth-child(5) { animation-delay: .18s; }
+
+/* ---------------------------------------------- 按钮按下反馈 ----
+   transform 用 .06s 而不是 .14s：按下要"立刻"有反应，
+   松开的回弹可以慢一点。差别很小，但手感差别不小。 */
+.btn { transition: background .14s var(--ease), border-color .14s var(--ease),
+                   box-shadow .14s var(--ease), transform .06s var(--ease); }
+.btn:not(:disabled):active { transform: scale(.972); }
+.btn:disabled { cursor: not-allowed; }
+
+/* ==========================================================================
+   降低动效偏好
+   ==========================================================================
+
+   这是一条**必须**有的规则，不是可选项。
+
+   有些人对动画/位移过敏：前庭功能障碍的人会因为界面滑动而眩晕、恶心。
+   Windows 和 macOS 都提供了系统级的开关（"显示动画"关掉），
+   浏览器会把它翻译成 prefers-reduced-motion: reduce。
+
+   这里不是"把动画调快"，而是**彻底关掉位移和缩放** —— 只保留
+   纯淡入淡出（不产生空间位移感），并且把时长压到 1ms 级，
+   让依赖 transitionend / animationend 的逻辑照常触发。
+
+   注意用 !important：上面那些规则里有更具体的选择器，
+   不加的话会被覆盖掉，那这条规则就形同虚设。 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* 关掉所有产生空间位移的动画本身，而不只是缩短时长 */
+  .view.is-active { animation: none !important; }
+  @keyframes rowIn  { from { opacity: 1; transform: none; } }
+  @keyframes cardIn { from { opacity: 1; transform: none; } }
+  @keyframes rise   { from { opacity: 1; transform: none; } }
+  @keyframes toastIn  { from { opacity: 1; transform: none; } }
+  @keyframes toastOut { to   { opacity: 1; transform: none; } }
+  @keyframes modalIn  { from { opacity: 1; transform: none; } }
+  .btn:not(:disabled):active { transform: none; }
+  /* 转圈是"正在进行"的唯一指示，不能停 —— 停下来会让人以为卡死了。
+     换成透明度呼吸，同样不产生位移感。 */
+  @keyframes spin { to { transform: rotate(360deg); } }
+}
